@@ -25,8 +25,9 @@ class StressTestRunner
             'redis_port' => 6379,
             'target_rps' => null,
             'custom_keys' => null,
-            'custom_max_attempts' => null,
-            'custom_decay' => null,
+            'limiter_window' => null,
+            'limiter_rps' => null,
+            'limiter_burst' => null,
             'verbose' => false,
             'no_clear' => false,
             'max_speed' => false,
@@ -58,6 +59,9 @@ class StressTestRunner
         } else {
             echo "Mode: Throttled load testing - measuring rate limiting behavior\n";
         }
+        
+        // Show rate limiter configuration
+        $this->displayRateLimiterConfig();
         echo "\n";
         
         $testConfigs = $this->getTestConfigurations();
@@ -72,6 +76,11 @@ class StressTestRunner
         foreach ($testConfigs as $config) {
             echo "Running test: {$config['name']}\n";
             echo str_repeat("=", 60) . "\n";
+            
+            // Show effective rate limiter config for scenario-based tests
+            if (!isset($this->options['limiter_rps']) || $this->options['limiter_rps'] === null) {
+                $this->displayScenarioRateLimiterConfig($config);
+            }
             
             $results = [];
             
@@ -103,8 +112,11 @@ class StressTestRunner
                 'keys' => $this->options['custom_keys'],
                 'processes' => $this->options['processes'],
                 'duration' => $this->options['duration'],
-                'max_attempts' => $this->options['custom_max_attempts'] ?? 10,
-                'decay' => $this->options['custom_decay'] ?? 10,
+                'max_attempts' => 10,  // Default fallback - prefer using --limiter-rps/--limiter-burst
+                'decay' => 60,       // Default window - prefer using --limiter-window
+                'window' => $this->options['limiter_window'] ?? 60,
+                'limiter_rps' => $this->options['limiter_rps'],
+                'limiter_burst' => $this->options['limiter_burst'],
                 'target_rps' => $this->options['target_rps'] ?? 500
             ]];
         }
@@ -121,6 +133,9 @@ class StressTestRunner
                 'duration' => $this->options['duration'],
                 'max_attempts' => 100,
                 'decay' => 10,
+                'window' => $this->options['limiter_window'] ?? 60,
+                'limiter_rps' => $this->options['limiter_rps'],
+                'limiter_burst' => $this->options['limiter_burst'],
                 'target_rps' => $this->options['target_rps'] ?? 500
             ],
             [
@@ -131,6 +146,9 @@ class StressTestRunner
                 'duration' => $this->options['duration'],
                 'max_attempts' => 50,
                 'decay' => 10,
+                'window' => $this->options['limiter_window'] ?? 60,
+                'limiter_rps' => $this->options['limiter_rps'],
+                'limiter_burst' => $this->options['limiter_burst'],
                 'target_rps' => $this->options['target_rps'] ?? 1000
             ],
             [
@@ -141,6 +159,9 @@ class StressTestRunner
                 'duration' => $this->options['duration'],
                 'max_attempts' => 10,
                 'decay' => 10,
+                'window' => $this->options['limiter_window'] ?? 60,
+                'limiter_rps' => $this->options['limiter_rps'],
+                'limiter_burst' => $this->options['limiter_burst'],
                 'target_rps' => $this->options['target_rps'] ?? 2000
             ],
             [
@@ -151,6 +172,9 @@ class StressTestRunner
                 'duration' => max(10, $this->options['duration'] / 3),
                 'max_attempts' => 100,
                 'decay' => 5,
+                'window' => $this->options['limiter_window'] ?? 60,
+                'limiter_rps' => $this->options['limiter_rps'],
+                'limiter_burst' => $this->options['limiter_burst'],
                 'target_rps' => $this->options['target_rps'] ?? 1000
             ]
         ];
@@ -290,7 +314,36 @@ class StressTestRunner
             try {
                 // Measure latency of the rate limit check
                 $latencyStartTime = microtime(true);
-                $result = $limiter->attempt($key, $config['max_attempts'], $config['decay']);
+                // Convert old API parameters to new API parameters:
+                // API: attempt(key, burstCapacity, sustainedRate, window)
+                
+                $timeWindow = $config['window'];                    // Time window in seconds
+                
+                // Allow independent control of rate limiter rate vs test load rate
+                if (isset($config['limiter_rps']) && $config['limiter_rps'] !== null) {
+                    // Use explicit limiter RPS if provided
+                    $sustainedRate = (float)$config['limiter_rps'];      // Requests per second for rate limiter
+                    
+                    // Allow explicit burst capacity or reasonable default
+                    if (isset($config['limiter_burst']) && $config['limiter_burst'] !== null) {
+                        $burstCapacity = (int)$config['limiter_burst'];    // Explicit burst capacity
+                    } else {
+                        // Default: allow 10 seconds worth of sustained rate as burst
+                        $burstCapacity = max(10, (int)($sustainedRate * 10)); 
+                    }
+                } else {
+                    // Fallback to old behavior: derive from max_attempts
+                    $burstCapacity = $config['max_attempts'];           // Burst capacity
+                    $sustainedRate = $burstCapacity / (float)$timeWindow; // Calculate sustained rate (requests/second)
+                }
+                
+                // Debug output for rate limiter configuration (only show occasionally)
+                static $debugCount = 0;
+                if ($this->options['verbose'] && ++$debugCount <= 3) {
+                    echo "[DEBUG] Rate limiter config: burst=$burstCapacity, rate={$sustainedRate} req/sec, window={$timeWindow}s\n";
+                }
+                
+                $result = $limiter->attempt($key, $burstCapacity, $sustainedRate, $timeWindow);
                 $latencyEndTime = microtime(true);
                 
                 $latency = ($latencyEndTime - $latencyStartTime) * 1000; // Convert to milliseconds
@@ -322,7 +375,7 @@ class StressTestRunner
             
             // Rate limiting to prevent overwhelming the system
             if ($requestDelay > 0) {
-                usleep($requestDelay);
+                usleep((int)$requestDelay);
             }
         }
         
@@ -436,8 +489,32 @@ class StressTestRunner
             
             // Report findings
             printf("🏆 Highest Throughput: %s (%.3f RPS)\n", $bestRps['algorithm'], $bestRps['value']);
-            printf("🛡️  Lowest Error Rate: %s (%.3f%%)\n", $bestErrorRate['algorithm'], $bestErrorRate['value']);
-            printf("🎯 Highest Success Rate: %s (%.3f%%)\n", $bestSuccessRate['algorithm'], $bestSuccessRate['value']);
+            
+            // Only show error rate comparison if there are meaningful differences
+            // Skip only if ALL algorithms have 0% error rate
+            $allHaveZeroErrors = true;
+            foreach ($algorithms as $algorithm) {
+                if ($results[$algorithm]['error_rate'] > 0) {
+                    $allHaveZeroErrors = false;
+                    break;
+                }
+            }
+            if (!$allHaveZeroErrors) {
+                printf("🛡️  Lowest Error Rate: %s (%.3f%%)\n", $bestErrorRate['algorithm'], $bestErrorRate['value']);
+            }
+            
+            // Only show success rate comparison if there are meaningful differences
+            // Skip only if ALL algorithms have 100% success rate
+            $allHavePerfectSuccess = true;
+            foreach ($algorithms as $algorithm) {
+                if ($results[$algorithm]['success_rate'] < 100) {
+                    $allHavePerfectSuccess = false;
+                    break;
+                }
+            }
+            if (!$allHavePerfectSuccess) {
+                printf("🎯 Highest Success Rate: %s (%.3f%%)\n", $bestSuccessRate['algorithm'], $bestSuccessRate['value']);
+            }
 
             if ($bestLatency['value'] < PHP_FLOAT_MAX) {
                 echo "⚡ Lowest Avg Latency: {$bestLatency['algorithm']} (" . number_format($bestLatency['value'], 3) . " ms)\n";
@@ -556,6 +633,55 @@ class StressTestRunner
         }
     }
 
+    private function displayRateLimiterConfig(): void
+    {
+        // Calculate the effective rate limiter configuration that will be used
+        $timeWindow = $this->options['limiter_window'] ?? 60;
+        
+        if (isset($this->options['limiter_rps']) && $this->options['limiter_rps'] !== null) {
+            // Using explicit limiter RPS configuration
+            $sustainedRate = (float)$this->options['limiter_rps'];
+            
+            if (isset($this->options['limiter_burst']) && $this->options['limiter_burst'] !== null) {
+                $burstCapacity = (int)$this->options['limiter_burst'];
+                echo "Rate Limiter Config: {$sustainedRate} req/sec sustained, {$burstCapacity} burst capacity, {$timeWindow}s window\n";
+            } else {
+                $burstCapacity = max(10, (int)($sustainedRate * 10));
+                echo "Rate Limiter Config: {$sustainedRate} req/sec sustained, {$burstCapacity} burst capacity (auto), {$timeWindow}s window\n";
+            }
+        } else {
+            // Show that we're using scenario-based configuration
+            echo "Rate Limiter Config: Using scenario-based configuration (varies by test)\n";
+            if ($timeWindow !== 60) {
+                echo "Rate Limiter Window: {$timeWindow}s (overridden)\n";
+            }
+        }
+        
+        // Show test load configuration if specified
+        if (isset($this->options['target_rps']) && $this->options['target_rps'] !== null) {
+            echo "Test Load Target: {$this->options['target_rps']} req/sec\n";
+        }
+    }
+
+    private function displayScenarioRateLimiterConfig(array $config): void
+    {
+        // Show the effective rate limiter configuration for this specific scenario
+        $timeWindow = $config['decay'];
+        $burstCapacity = $config['max_attempts'];
+        
+        // Calculate sustained rate from the config
+        // For scenarios, we typically have max_attempts over decay seconds
+        $sustainedRate = $burstCapacity / $timeWindow;
+        
+        echo "Rate Limiter Config: {$sustainedRate} req/sec sustained, {$burstCapacity} burst capacity, {$timeWindow}s window\n";
+        
+        // Show test load info if available
+        if (isset($config['target_rps'])) {
+            echo "Test Load Target: {$config['target_rps']} req/sec\n";
+        }
+        echo "\n";
+    }
+
     private function getMaxProcesses(): int
     {
         // Try to determine system limits
@@ -657,8 +783,9 @@ function showHelp(): void
     echo "  --redis-host=HOST      Redis host (default: 127.0.0.1)\n";
     echo "  --redis-port=PORT      Redis port (default: 6379)\n";
     echo "  --keys=NUM             Custom number of keys for custom scenario\n";
-    echo "  --max-attempts=NUM     Custom max attempts for custom scenario\n";
-    echo "  --decay=SECONDS        Custom decay time for custom scenario\n";
+    echo "  --limiter-rps=NUM      Set rate limiter sustained rate (requests/sec) independent of test load\n";
+    echo "  --limiter-burst=NUM    Set rate limiter burst capacity (default: 10x sustained rate)\n";
+    echo "  --limiter-window=NUM   Set rate limiter window size for window-based algorithms (default: 60 seconds)\n";
     echo "  --verbose              Enable verbose output\n";
     echo "  --no-clear             Don't clear Redis between tests\n";
     echo "  --max-speed            Performance mode: send requests as fast as possible (no throttling)\n";
@@ -668,7 +795,9 @@ function showHelp(): void
     echo "  php stress-test.php --help\n";
     echo "  php stress-test.php --algorithms=sliding,gcra,token --duration=10\n";
     echo "  php stress-test.php --scenarios=high,medium --processes=10\n";
-    echo "  php stress-test.php --keys=100 --max-attempts=50 --decay=30\n";
+    echo "  php stress-test.php --keys=100 --limiter-rps=50 --limiter-burst=25 --limiter-window=30\n";
+    echo "  php stress-test.php --limiter-window=10 --algorithms=sliding,token --scenarios=high\n";
+    echo "  php stress-test.php --target-rps=200 --limiter-rps=100 --limiter-burst=20 --scenarios=custom --keys=1\n";
     echo "  php stress-test.php --scenarios=burst --algorithms=fixed\n";
     echo "  php stress-test.php --max-speed --duration=5 --processes=4\n";
     echo "  php stress-test.php --latency-precision=5 --latency-sample=1 --algorithms=gcra\n";
@@ -731,11 +860,14 @@ function parseArguments(): array
                     $options['custom_keys'] = (int)$value;
                     $options['scenarios'] = ['custom'];
                     break;
-                case 'max-attempts':
-                    $options['custom_max_attempts'] = (int)$value;
+                case 'limiter-window':
+                    $options['limiter_window'] = (int)$value;
                     break;
-                case 'decay':
-                    $options['custom_decay'] = (int)$value;
+                case 'limiter-rps':
+                    $options['limiter_rps'] = (float)$value;
+                    break;
+                case 'limiter-burst':
+                    $options['limiter_burst'] = (int)$value;
                     break;
                 case 'latency-precision':
                     $options['latency_precision'] = max(0, min(10, (int)$value)); // Clamp between 0-10

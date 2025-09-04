@@ -47,11 +47,11 @@ This is a standalone PHP library implementing multiple rate limiting algorithms 
 - Each algorithm has separate Lua implementations in its namespace
 
 ### Key Methods
-- `attempt($key, $maxAttempts, $decay)` - Main rate limiting method
-- `attempts($key, $decay)` - Get current attempt count
-- `remaining($key, $maxAttempts, $decay)` - Get remaining attempts
+- `attempt($key, $burstCapacity, $sustainedRate, $window)` - Main rate limiting method
+- `attempts($key, $window)` - Get current attempt count
+- `remaining($key, $burstCapacity, $sustainedRate, $window)` - Get remaining attempts
 - `resetAttempts($key)` - Clear rate limit data
-- `availableIn($key, $maxAttempts, $decay)` - Seconds until next attempt allowed
+- `availableIn($key, $burstCapacity, $sustainedRate, $window)` - Seconds until next attempt allowed
 
 ### Testing Structure
 - PHPUnit with strict configuration in `phpunit.xml`
@@ -63,7 +63,7 @@ This is a standalone PHP library implementing multiple rate limiting algorithms 
 - **Multi-process testing** using `pcntl_fork()` for concurrent load simulation
 - **Comprehensive CLI interface** with configurable algorithms, scenarios, duration, processes
 - **Built-in scenarios**: high/medium/low contention + single-key burst test
-- **Custom scenarios** with `--keys=N --max-attempts=N --decay=N` parameters
+- **Custom scenarios** with `--keys=N --limiter-rps=N --limiter-burst=N` parameters
 - **Performance metrics**: RPS, success/block/error rates, algorithm comparison
 - **Prerequisites**: Requires `pcntl` extension and Redis on localhost:6379
 
@@ -73,7 +73,7 @@ This is a standalone PHP library implementing multiple rate limiting algorithms 
 php stress-test.php --scenarios=high --duration=10
 
 # Test only sliding window with custom parameters
-php stress-test.php --algorithms=sliding --keys=100 --max-attempts=50 --decay=30
+php stress-test.php --algorithms=sliding --keys=100 --limiter-rps=50 --limiter-burst=25 --limiter-window=30
 
 # Quick burst test comparison
 php stress-test.php --scenarios=burst --duration=5 --processes=5

@@ -251,8 +251,8 @@ php stress-test.php
 # Test only GCRA algorithm with high contention for 10 seconds
 php stress-test.php --algorithms=gcra --scenarios=high --duration=10
 
-# Custom test with 100 keys, 50 max attempts, 5 second windows
-php stress-test.php --keys=100 --max-attempts=50 --decay=5 --duration=15
+# Custom test with 100 keys, 50 RPS rate limit, 25 burst capacity, 30 second windows
+php stress-test.php --keys=100 --limiter-rps=50 --limiter-burst=25 --limiter-window=30 --duration=15
 
 # Quick comparison between algorithms on burst scenario
 php stress-test.php --scenarios=burst --duration=5 --processes=5
@@ -285,8 +285,9 @@ php stress-test.php --latency-sample=100 --max-speed --duration=30 --processes=1
 - `--duration=SECONDS` - Test duration (default: 30s)
 - `--processes=NUM` - Concurrent processes (default: 20)
 - `--keys=NUM` - Custom key count for custom scenarios
-- `--max-attempts=NUM` - Custom rate limit
-- `--decay=SECONDS` - Custom window size
+- `--limiter-rps=NUM` - Rate limiter sustained rate (requests/sec)
+- `--limiter-burst=NUM` - Rate limiter burst capacity
+- `--limiter-window=SECONDS` - Time window size (default: 60s)
 - `--verbose` - Detailed output
 - `--no-clear` - Keep Redis data between tests
 - `--max-speed` - Performance mode: send requests as fast as possible (no throttling)
