@@ -403,23 +403,80 @@ class StressTestRunner
         // Analysis for multiple algorithms
         if (count($algorithms) > 1) {
             echo "Analysis:\n";
-            $first = $algorithms[0];
-            $second = $algorithms[1];
             
-            if ($results[$first]['error_rate'] < $results[$second]['error_rate']) {
-                echo "✓ {$first} had fewer errors\n";
-            } elseif ($results[$second]['error_rate'] < $results[$first]['error_rate']) {
-                echo "✓ {$second} had fewer errors\n";
-            } else {
-                echo "• Both algorithms had similar error rates\n";
+            // Find best performers in different categories
+            $bestRps = ['algorithm' => '', 'value' => 0];
+            $bestErrorRate = ['algorithm' => '', 'value' => 100];
+            $bestLatency = ['algorithm' => '', 'value' => PHP_FLOAT_MAX];
+            $bestSuccessRate = ['algorithm' => '', 'value' => 0];
+            
+            foreach ($algorithms as $algorithm) {
+                $result = $results[$algorithm];
+                
+                // Best RPS
+                if ($result['rps'] > $bestRps['value']) {
+                    $bestRps = ['algorithm' => $algorithm, 'value' => $result['rps']];
+                }
+                
+                // Best (lowest) error rate
+                if ($result['error_rate'] < $bestErrorRate['value']) {
+                    $bestErrorRate = ['algorithm' => $algorithm, 'value' => $result['error_rate']];
+                }
+                
+                // Best (lowest) average latency
+                if (isset($result['latency_avg']) && $result['latency_avg'] < $bestLatency['value']) {
+                    $bestLatency = ['algorithm' => $algorithm, 'value' => $result['latency_avg']];
+                }
+                
+                // Best success rate
+                if ($result['success_rate'] > $bestSuccessRate['value']) {
+                    $bestSuccessRate = ['algorithm' => $algorithm, 'value' => $result['success_rate']];
+                }
             }
             
-            if ($results[$first]['rps'] > $results[$second]['rps']) {
-                echo "✓ {$first} achieved higher throughput\n";
-            } elseif ($results[$second]['rps'] > $results[$first]['rps']) {
-                echo "✓ {$second} achieved higher throughput\n";
+            // Report findings
+            printf("🏆 Highest Throughput: %s (%.3f RPS)\n", $bestRps['algorithm'], $bestRps['value']);
+            printf("🛡️  Lowest Error Rate: %s (%.3f%%)\n", $bestErrorRate['algorithm'], $bestErrorRate['value']);
+            printf("🎯 Highest Success Rate: %s (%.3f%%)\n", $bestSuccessRate['algorithm'], $bestSuccessRate['value']);
+
+            if ($bestLatency['value'] < PHP_FLOAT_MAX) {
+                echo "⚡ Lowest Avg Latency: {$bestLatency['algorithm']} (" . number_format($bestLatency['value'], 3) . " ms)\n";
+            }
+            
+            // Additional insights
+            echo "\nInsights:\n";
+            
+            // Performance comparison
+            $rpsRange = max(array_column($results, 'rps')) - min(array_column($results, 'rps'));
+            $avgRps = array_sum(array_column($results, 'rps')) / count($results);
+            
+            if ($rpsRange > $avgRps * 0.5) {
+                echo "• Significant performance differences between algorithms (range: " . number_format($rpsRange) . " RPS)\n";
             } else {
-                echo "• Both algorithms achieved similar throughput\n";
+                echo "• Similar performance across algorithms (range: " . number_format($rpsRange) . " RPS)\n";
+            }
+            
+            // Error rate analysis
+            $errorRates = array_column($results, 'error_rate');
+            $maxErrorRate = max($errorRates);
+            $minErrorRate = min($errorRates);
+            
+            if ($maxErrorRate > 1.0 && ($maxErrorRate - $minErrorRate) > 0.5) {
+                echo "• Some algorithms struggled with errors - consider reducing load or checking Redis performance\n";
+            } elseif ($maxErrorRate < 0.1) {
+                echo "• All algorithms handled the load well with minimal errors\n";
+            }
+            
+            // Success rate insights
+            $successRates = array_column($results, 'success_rate');
+            $avgSuccessRate = array_sum($successRates) / count($successRates);
+            
+            if ($avgSuccessRate > 80) {
+                echo "• High success rates indicate good algorithm behavior under this load\n";
+            } elseif ($avgSuccessRate > 50) {
+                echo "• Moderate rate limiting - algorithms are working as expected\n";
+            } else {
+                echo "• Heavy rate limiting - consider if this matches your expected behavior\n";
             }
         }
     }
