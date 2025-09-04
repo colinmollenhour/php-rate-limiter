@@ -27,7 +27,7 @@ $redis = new Credis_Client('127.0.0.1', 6379);
 $factory = new RateLimiterFactory($redis);
 
 // Choose your algorithm
-$rateLimiter = $factory->createSlidingWindow(); // or createFixedWindow()
+$rateLimiter = $factory->createSlidingWindow(); // or createFixedWindow() or createLeakyBucket()
 
 // Rate limit: 10 requests per 60 seconds
 $result = $rateLimiter->attempt('user:123', 10, 60);
@@ -45,8 +45,8 @@ if ($result->successful()) {
 |-----------|----------|---------|------------------|-------------|-----------|
 | **Sliding Window** | High | Higher | Excellent | Good | APIs requiring smooth rate limiting |
 | **Fixed Window** | Medium | Lower | Poor | Excellent | High-traffic applications |
+| **Leaky Bucket** | High | Medium | Good | Good | Traffic spike handling with average rate control |
 | **Token Bucket** | High | Lower | Good | Excellent | *Coming soon* |
-| **Leaky Bucket** | High | Lower | Excellent | Good | *Coming soon* |
 
 ### Sliding Window
 - **How it works**: Tracks individual request timestamps using Redis sorted sets
@@ -59,6 +59,12 @@ if ($result->successful()) {
 - **Pros**: Memory efficient, high performance
 - **Cons**: Allows up to 2x burst at window boundaries (e.g., 100 requests at 11:59 + 100 at 12:01)
 - **Use when**: High traffic, occasional bursts acceptable
+
+### Leaky Bucket
+- **How it works**: Simulates a bucket that leaks at a constant rate, requests fill the bucket
+- **Pros**: Allows burst up to capacity, enforces average rate, accommodates traffic spikes
+- **Cons**: More complex than fixed window, moderate memory usage
+- **Use when**: Need burst tolerance while maintaining long-term average rate limits
 
 ## API Reference
 
@@ -74,14 +80,15 @@ $rateLimiter->resetAttempts($key);
 ```php
 $factory->createSlidingWindow();
 $factory->createFixedWindow();
+$factory->createLeakyBucket();
 // $factory->createTokenBucket();  // Coming soon
-// $factory->createLeakyBucket();  // Coming soon
 ```
 
 ### Direct Instantiation
 ```php
 $slidingWindow = new \Cm\RateLimiter\SlidingWindow\RateLimiter($redis);
 $fixedWindow = new \Cm\RateLimiter\FixedWindow\RateLimiter($redis);
+$leakyBucket = new \Cm\RateLimiter\LeakyBucket\RateLimiter($redis);
 ```
 
 ## Testing
@@ -98,7 +105,6 @@ Comprehensive stress testing tools are included to benchmark and compare algorit
 
 #### Test Files
 - `stress-test.php` - Full comprehensive stress test with CLI options
-- `test-basic.php` - Basic functionality validation
 
 #### Prerequisites
 1. **PHP Extensions Required:**
@@ -113,7 +119,8 @@ Comprehensive stress testing tools are included to benchmark and compare algorit
 
 **Basic functionality validation:**
 ```bash
-php test-basic.php
+# Use unit tests for functionality validation
+composer test
 ```
 
 **Full stress test with CLI options:**
@@ -121,11 +128,11 @@ php test-basic.php
 # Show help and all available options
 php stress-test.php --help
 
-# Default: All scenarios, both algorithms, 30s duration, 20 processes
+# Default: All scenarios, all algorithms, 30s duration, 20 processes
 php stress-test.php
 
-# Test only sliding window algorithm with high contention for 10 seconds
-php stress-test.php --algorithms=sliding --scenarios=high --duration=10
+# Test only leaky bucket algorithm with high contention for 10 seconds
+php stress-test.php --algorithms=leaky --scenarios=high --duration=10
 
 # Custom test with 100 keys, 50 max attempts, 5 second windows
 php stress-test.php --keys=100 --max-attempts=50 --decay=5 --duration=15
@@ -147,7 +154,7 @@ php stress-test.php --scenarios=high,medium --verbose --duration=20
 
 #### CLI Options
 
-- `--algorithms=sliding,fixed` - Choose which algorithms to test
+- `--algorithms=sliding,fixed,leaky` - Choose which algorithms to test
 - `--scenarios=high,medium,low,burst,all,custom` - Select test scenarios
 - `--duration=SECONDS` - Test duration (default: 30s)
 - `--processes=NUM` - Concurrent processes (default: 20)
@@ -178,6 +185,12 @@ For each algorithm and scenario:
 - Lower memory usage, higher throughput, simpler Redis operations
 - Allows up to 2x burst at window boundaries
 - Best for high-performance scenarios where some burst is acceptable
+
+**LeakyBucket Algorithm:**
+- Moderate memory usage, good throughput with burst accommodation
+- Allows initial burst up to capacity, then enforces steady leak rate
+- Best for handling traffic spikes while maintaining average rate limits
+- Typically shows higher success rates in high contention scenarios
 
 #### Troubleshooting
 

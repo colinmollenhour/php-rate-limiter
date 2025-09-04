@@ -7,6 +7,7 @@ use Cm\RateLimiter\RateLimiterFactory;
 use Cm\RateLimiter\RateLimiterInterface;
 use Cm\RateLimiter\SlidingWindow\RateLimiter as SlidingWindowRateLimiter;
 use Cm\RateLimiter\FixedWindow\RateLimiter as FixedWindowRateLimiter;
+use Cm\RateLimiter\LeakyBucket\RateLimiter as LeakyBucketRateLimiter;
 use Credis_Client;
 
 class RateLimiterFactoryTest extends TestCase
@@ -64,22 +65,45 @@ class RateLimiterFactoryTest extends TestCase
         $this->assertEquals(4, $result->retriesLeft);
     }
 
-    public function testBothAlgorithmsAreIndependent(): void
+    public function testCreateLeakyBucket(): void
+    {
+        $rateLimiter = $this->factory->createLeakyBucket();
+        
+        $this->assertInstanceOf(RateLimiterInterface::class, $rateLimiter);
+        $this->assertInstanceOf(LeakyBucketRateLimiter::class, $rateLimiter);
+    }
+
+    public function testLeakyBucketRateLimiterWorks(): void
+    {
+        $rateLimiter = $this->factory->createLeakyBucket();
+        
+        // Test that the created rate limiter actually works
+        $result = $rateLimiter->attempt('leaky-factory-test', 5, 30);
+        $this->assertTrue($result->successful());
+        $this->assertEquals(4, $result->retriesLeft);
+    }
+
+    public function testAllAlgorithmsAreIndependent(): void
     {
         $slidingWindow = $this->factory->createSlidingWindow();
         $fixedWindow = $this->factory->createFixedWindow();
+        $leakyBucket = $this->factory->createLeakyBucket();
         
         // Use the same key but different algorithms - they should be independent
         $slidingResult = $slidingWindow->attempt('independence-test', 5, 30);
         $fixedResult = $fixedWindow->attempt('independence-test', 5, 30);
+        $leakyResult = $leakyBucket->attempt('independence-test', 5, 30);
         
         $this->assertTrue($slidingResult->successful());
         $this->assertTrue($fixedResult->successful());
+        $this->assertTrue($leakyResult->successful());
         $this->assertEquals(4, $slidingResult->retriesLeft);
         $this->assertEquals(4, $fixedResult->retriesLeft);
+        $this->assertEquals(4, $leakyResult->retriesLeft);
         
         // Check that they have different key prefixes
         $this->assertEquals(1, $slidingWindow->attempts('independence-test', 30));
         $this->assertEquals(1, $fixedWindow->attempts('independence-test', 30));
+        $this->assertEquals(1, $leakyBucket->attempts('independence-test', 30));
     }
 }

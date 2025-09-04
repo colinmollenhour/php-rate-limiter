@@ -14,7 +14,7 @@ class StressTestRunner
     public function __construct(array $options = [])
     {
         $this->options = array_merge([
-            'algorithms' => ['sliding', 'fixed'],
+            'algorithms' => ['sliding', 'fixed', 'leaky'],
             'scenarios' => ['all'],
             'duration' => 30,
             'processes' => 20,
@@ -218,9 +218,12 @@ class StressTestRunner
         $redis = new Credis_Client('127.0.0.1', 6379);
         $factory = new RateLimiterFactory($redis);
         
-        $limiter = $algorithm === 'sliding' 
-            ? $factory->createSlidingWindow()
-            : $factory->createFixedWindow();
+        $limiter = match ($algorithm) {
+            'sliding' => $factory->createSlidingWindow(),
+            'fixed' => $factory->createFixedWindow(),
+            'leaky' => $factory->createLeakyBucket(),
+            default => throw new InvalidArgumentException("Unknown algorithm: {$algorithm}")
+        };
         
         $stats = [
             'successful' => 0,
@@ -374,7 +377,7 @@ function showHelp(): void
     echo "Usage: php stress-test.php [OPTIONS]\n\n";
     echo "Options:\n";
     echo "  --help                 Show this help message\n";
-    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed or both (default: sliding,fixed)\n";
+    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed,leaky or combinations (default: sliding,fixed,leaky)\n";
     echo "  --scenarios=SCENARIO   Test scenarios: high,medium,low,burst,all or custom (default: all)\n";
     echo "  --duration=SECONDS     Duration of each test in seconds (default: 30)\n";
     echo "  --processes=NUM        Number of concurrent processes (default: 20)\n";
@@ -388,7 +391,7 @@ function showHelp(): void
     echo "  --no-clear             Don't clear Redis between tests\n\n";
     echo "Examples:\n";
     echo "  php stress-test.php --help\n";
-    echo "  php stress-test.php --algorithms=sliding --duration=10\n";
+    echo "  php stress-test.php --algorithms=sliding,leaky --duration=10\n";
     echo "  php stress-test.php --scenarios=high,medium --processes=10\n";
     echo "  php stress-test.php --keys=100 --max-attempts=50 --decay=30\n";
     echo "  php stress-test.php --scenarios=burst --algorithms=fixed\n\n";
@@ -401,7 +404,8 @@ function showHelp(): void
     echo "  custom  - Use custom parameters (requires --keys)\n\n";
     echo "Algorithms:\n";
     echo "  sliding - Sliding window algorithm (precise, higher memory)\n";
-    echo "  fixed   - Fixed window algorithm (efficient, allows burst)\n\n";
+    echo "  fixed   - Fixed window algorithm (efficient, allows burst)\n";
+    echo "  leaky   - Leaky bucket algorithm (allows burst, enforces average rate)\n\n";
 }
 
 function parseArguments(): array
@@ -463,10 +467,10 @@ function parseArguments(): array
     
     // Validate algorithms
     if (isset($options['algorithms'])) {
-        $validAlgorithms = ['sliding', 'fixed'];
+        $validAlgorithms = ['sliding', 'fixed', 'leaky'];
         $options['algorithms'] = array_intersect($options['algorithms'], $validAlgorithms);
         if (empty($options['algorithms'])) {
-            die("ERROR: Invalid algorithms. Valid options: sliding, fixed\n");
+            die("ERROR: Invalid algorithms. Valid options: sliding, fixed, leaky\n");
         }
     }
     

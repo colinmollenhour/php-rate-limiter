@@ -4,6 +4,7 @@ namespace Cm\RateLimiter;
 
 use Cm\RateLimiter\SlidingWindow\RateLimiter as SlidingWindowRateLimiter;
 use Cm\RateLimiter\FixedWindow\RateLimiter as FixedWindowRateLimiter;
+use Cm\RateLimiter\LeakyBucket\RateLimiter as LeakyBucketRateLimiter;
 use Credis_Client;
 
 class RateLimiterFactory
@@ -23,5 +24,10 @@ class RateLimiterFactory
     public function createFixedWindow(): RateLimiterInterface
     {
         return new FixedWindowRateLimiter($this->redis);
+    }
+
+    public function createLeakyBucket(): RateLimiterInterface
+    {
+        return new LeakyBucketRateLimiter($this->redis);
     }
 }
