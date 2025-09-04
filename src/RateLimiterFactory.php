@@ -6,6 +6,7 @@ use Cm\RateLimiter\SlidingWindow\RateLimiter as SlidingWindowRateLimiter;
 use Cm\RateLimiter\FixedWindow\RateLimiter as FixedWindowRateLimiter;
 use Cm\RateLimiter\LeakyBucket\RateLimiter as LeakyBucketRateLimiter;
 use Cm\RateLimiter\GCRA\RateLimiter as GCRARateLimiter;
+use Cm\RateLimiter\TokenBucket\RateLimiter as TokenBucketRateLimiter;
 use Credis_Client;
 
 class RateLimiterFactory
@@ -35,5 +36,10 @@ class RateLimiterFactory
     public function createGCRA(): RateLimiterInterface
     {
         return new GCRARateLimiter($this->redis);
+    }
+
+    public function createTokenBucket(): RateLimiterInterface
+    {
+        return new TokenBucketRateLimiter($this->redis);
     }
 }

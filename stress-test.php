@@ -17,7 +17,7 @@ class StressTestRunner
     public function __construct(array $options = [])
     {
         $this->options = array_merge([
-            'algorithms' => ['sliding', 'fixed', 'leaky', 'gcra'],
+            'algorithms' => ['sliding', 'fixed', 'leaky', 'gcra', 'token'],
             'scenarios' => ['all'],
             'duration' => 30,
             'processes' => 20,
@@ -262,6 +262,7 @@ class StressTestRunner
             'fixed' => $factory->createFixedWindow(),
             'leaky' => $factory->createLeakyBucket(),
             'gcra' => $factory->createGCRA(),
+            'token' => $factory->createTokenBucket(),
             default => throw new InvalidArgumentException("Unknown algorithm: {$algorithm}")
         };
         
@@ -591,7 +592,7 @@ function showHelp(): void
     echo "Usage: php stress-test.php [OPTIONS]\n\n";
     echo "Options:\n";
     echo "  --help                 Show this help message\n";
-    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed,leaky,gcra or combinations (default: sliding,fixed,leaky,gcra)\n";
+    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed,leaky,gcra,token or combinations (default: sliding,fixed,leaky,gcra,token)\n";
     echo "  --scenarios=SCENARIO   Test scenarios: high,medium,low,burst,all or custom (default: all)\n";
     echo "  --duration=SECONDS     Duration of each test in seconds (default: 30)\n";
     echo "  --processes=NUM        Number of concurrent processes (default: 20)\n";
@@ -608,7 +609,7 @@ function showHelp(): void
     echo "  --latency-sample=N     Sample rate for latency collection - collect every Nth measurement (default: 1 = all measurements)\n\n";
     echo "Examples:\n";
     echo "  php stress-test.php --help\n";
-    echo "  php stress-test.php --algorithms=sliding,gcra --duration=10\n";
+    echo "  php stress-test.php --algorithms=sliding,gcra,token --duration=10\n";
     echo "  php stress-test.php --scenarios=high,medium --processes=10\n";
     echo "  php stress-test.php --keys=100 --max-attempts=50 --decay=30\n";
     echo "  php stress-test.php --scenarios=burst --algorithms=fixed\n";
@@ -626,7 +627,8 @@ function showHelp(): void
     echo "  sliding - Sliding window algorithm (precise, higher memory)\n";
     echo "  fixed   - Fixed window algorithm (efficient, allows burst)\n";
     echo "  leaky   - Leaky bucket algorithm (allows burst, enforces average rate)\n";
-    echo "  gcra    - GCRA algorithm (memory efficient, smooth rate limiting)\n\n";
+    echo "  gcra    - GCRA algorithm (memory efficient, smooth rate limiting)\n";
+    echo "  token   - Token bucket algorithm (allows burst, gradual refill)\n\n";
 }
 
 function parseArguments(): array
@@ -696,10 +698,10 @@ function parseArguments(): array
     
     // Validate algorithms
     if (isset($options['algorithms'])) {
-        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra'];
+        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra', 'token'];
         $options['algorithms'] = array_intersect($options['algorithms'], $validAlgorithms);
         if (empty($options['algorithms'])) {
-            die("ERROR: Invalid algorithms. Valid options: sliding, fixed, leaky, gcra\n");
+            die("ERROR: Invalid algorithms. Valid options: sliding, fixed, leaky, gcra, token\n");
         }
     }
     

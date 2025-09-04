@@ -1,6 +1,6 @@
 # Cm\RateLimiter
 
-A flexible PHP library implementing 4 different rate limiting algorithms using Redis. Includes comprehensive performance testing and supports Redis alternatives like Dragonfly, KeyDB, and Valkey.
+A flexible PHP library implementing 5 different rate limiting algorithms using Redis. Includes comprehensive performance testing and supports Redis alternatives like Dragonfly, KeyDB, and Valkey.
 
 > **Note:** This is a standalone fork of [bvtterfly/sliding-window-rate-limiter](https://github.com/bvtterfly/sliding-window-rate-limiter), refactored to remove Laravel dependencies and support multiple algorithms.
 
@@ -27,7 +27,7 @@ $redis = new Credis_Client('127.0.0.1', 6379);
 $factory = new RateLimiterFactory($redis);
 
 // Choose your algorithm
-$rateLimiter = $factory->createSlidingWindow(); // or createFixedWindow(), createLeakyBucket(), createGCRA()
+$rateLimiter = $factory->createSlidingWindow(); // or createFixedWindow(), createLeakyBucket(), createGCRA(), createTokenBucket()
 
 // Rate limit: 10 requests per 60 seconds
 $result = $rateLimiter->attempt('user:123', 10, 60);
@@ -47,7 +47,7 @@ if ($result->successful()) {
 | **Fixed Window** | Medium | Lower | Poor | Excellent | High-traffic applications |
 | **Leaky Bucket** | High | Medium | Good | Good | Traffic spike handling with average rate control |
 | **GCRA** | High | Lower | Excellent | Excellent | Memory-efficient smooth rate limiting |
-| **Token Bucket** | High | Lower | Good | Excellent | *Coming soon* |
+| **Token Bucket** | High | Medium | Good | Excellent | Burst-tolerant with gradual refill |
 
 ### Sliding Window
 - **How it works**: Tracks individual request timestamps using Redis sorted sets
@@ -73,16 +73,23 @@ if ($result->successful()) {
 - **Cons**: More complex algorithm, requires understanding of TAT concept
 - **Use when**: Need memory-efficient rate limiting with smooth, predictable behavior, or maximum performance
 
+### Token Bucket
+- **How it works**: A bucket holds tokens that are consumed by requests and refilled at a constant rate
+- **Pros**: Allows bursts up to bucket capacity, intuitive model, gradual refill prevents starvation
+- **Cons**: More memory usage than GCRA, moderate complexity
+- **Use when**: Need burst tolerance with predictable refill behavior, web APIs with bursty traffic patterns
+
 ## Performance Comparison
 
 Based on max-speed benchmarking (requests/second with no throttling):
 
 | Algorithm | Throughput (RPS) | Latency Avg (ms) | Latency P99 (ms) | Memory per Key | Best Use Case |
 |-----------|------------------|------------------|------------------|----------------|---------------|
-| **GCRA** | ~22,000 | 0.088 | 0.250 | Single float | High-performance applications |
-| **Leaky Bucket** | ~11,300 | 0.263 | 0.744 | Hash with 2 fields | Traffic spike handling |
-| **Fixed Window** | ~11,200 | 0.260 | 0.729 | Single counter + TTL | Simple high-traffic apps |
-| **Sliding Window** | ~10,200 | 0.308 | 0.847 | Sorted set | Precise rate limiting |
+| **GCRA** | ~25,900 | 0.151 | 0.460 | Single float | High-performance applications |
+| **Fixed Window** | ~13,700 | 0.286 | 0.670 | Single counter + TTL | Simple high-traffic apps |
+| **Leaky Bucket** | ~13,300 | 0.298 | 0.710 | Hash with 3 fields | Traffic spike handling |
+| **Sliding Window** | ~12,900 | 0.307 | 0.740 | Sorted set | Precise rate limiting |
+| **Token Bucket** | ~12,800 | 0.308 | 0.800 | Hash with 4 fields | Burst-tolerant APIs |
 
 > **Key Insight**: GCRA offers the lowest memory usage, highest performance, AND lowest latency (~3x faster than other algorithms), making it ideal for high-scale applications.
 
@@ -102,7 +109,7 @@ $factory->createSlidingWindow();
 $factory->createFixedWindow();
 $factory->createLeakyBucket();
 $factory->createGCRA();
-// $factory->createTokenBucket();  // Coming soon
+$factory->createTokenBucket();
 ```
 
 ### Direct Instantiation
@@ -111,6 +118,7 @@ $slidingWindow = new \Cm\RateLimiter\SlidingWindow\RateLimiter($redis);
 $fixedWindow = new \Cm\RateLimiter\FixedWindow\RateLimiter($redis);
 $leakyBucket = new \Cm\RateLimiter\LeakyBucket\RateLimiter($redis);
 $gcra = new \Cm\RateLimiter\GCRA\RateLimiter($redis);
+$tokenBucket = new \Cm\RateLimiter\TokenBucket\RateLimiter($redis);
 ```
 
 ## Testing
@@ -185,7 +193,7 @@ php stress-test.php --latency-sample=100 --max-speed --duration=30 --processes=1
 
 #### CLI Options
 
-- `--algorithms=sliding,fixed,leaky,gcra` - Choose which algorithms to test
+- `--algorithms=sliding,fixed,leaky,gcra,token` - Choose which algorithms to test
 - `--scenarios=high,medium,low,burst,all,custom` - Select test scenarios
 - `--duration=SECONDS` - Test duration (default: 30s)
 - `--processes=NUM` - Concurrent processes (default: 20)
@@ -263,6 +271,12 @@ The stress test supports two distinct testing modes:
 - Uses theoretical arrival time (TAT) for precise, predictable rate limiting  
 - Best for high-performance, memory-constrained environments requiring smooth rate control
 - Shows moderate success rates with consistent, predictable blocking behavior
+
+**Token Bucket Algorithm:**
+- Moderate memory usage (hash with 4 fields per key), good throughput
+- Allows initial bursts up to bucket capacity, then gradual token refill
+- Excellent success rates in burst scenarios, very low block rates
+- Best for web APIs with bursty traffic patterns that need burst tolerance
 
 #### Troubleshooting
 
