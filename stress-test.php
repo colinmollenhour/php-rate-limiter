@@ -1,9 +1,12 @@
 <?php
 
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
+
 require_once 'vendor/autoload.php';
 
 use Cm\RateLimiter\RateLimiterFactory;
-use Credis_Client;
 
 class StressTestRunner
 {
@@ -26,7 +29,9 @@ class StressTestRunner
             'custom_decay' => null,
             'verbose' => false,
             'no_clear' => false,
-            'max_speed' => false
+            'max_speed' => false,
+            'latency_precision' => 2,
+            'latency_sample' => 1
         ], $options);
         
         $this->redis = new Credis_Client($this->options['redis_host'], $this->options['redis_port']);
@@ -189,7 +194,13 @@ class StressTestRunner
             'rps' => 0,
             'success_rate' => 0,
             'block_rate' => 0,
-            'error_rate' => 0
+            'error_rate' => 0,
+            'latency_avg' => 0,
+            'latency_p50' => 0,
+            'latency_p95' => 0,
+            'latency_p99' => 0,
+            'latency_max' => 0,
+            'latency_min' => 0
         ];
         
         // Create temporary files for process communication
@@ -223,6 +234,7 @@ class StressTestRunner
         $results['duration'] = $endTime - $startTime;
         
         // Collect results from temp files
+        $allLatencyCounters = [];
         foreach ($tempFiles as $i => $tempFile) {
             if (file_exists($tempFile)) {
                 $data = json_decode(file_get_contents($tempFile), true);
@@ -231,6 +243,16 @@ class StressTestRunner
                     $results['blocked'] += $data['blocked'];
                     $results['errors'] += $data['errors'];
                     $results['total_requests'] += $data['total_requests'];
+                    
+                    // Merge latency counters
+                    if (isset($data['latency_counters']) && is_array($data['latency_counters'])) {
+                        foreach ($data['latency_counters'] as $latency => $count) {
+                            if (!isset($allLatencyCounters[$latency])) {
+                                $allLatencyCounters[$latency] = 0;
+                            }
+                            $allLatencyCounters[$latency] += $count;
+                        }
+                    }
                 }
                 unlink($tempFile);
             }
@@ -242,6 +264,11 @@ class StressTestRunner
             $results['success_rate'] = ($results['successful'] / $results['total_requests']) * 100;
             $results['block_rate'] = ($results['blocked'] / $results['total_requests']) * 100;
             $results['error_rate'] = ($results['errors'] / $results['total_requests']) * 100;
+        }
+        
+        // Calculate latency statistics from counter data
+        if (!empty($allLatencyCounters)) {
+            $results = array_merge($results, $this->calculateLatencyStatistics($allLatencyCounters));
         }
         
         return $results;
@@ -265,7 +292,8 @@ class StressTestRunner
             'successful' => 0,
             'blocked' => 0, 
             'errors' => 0,
-            'total_requests' => 0
+            'total_requests' => 0,
+            'latency_counters' => [] // Store latency counts by rounded value (5 decimal places)
         ];
         
         $endTime = time() + $config['duration'];
@@ -282,7 +310,24 @@ class StressTestRunner
             $key = "test_key_{$keyId}";
             
             try {
+                // Measure latency of the rate limit check
+                $startTime = microtime(true);
                 $result = $limiter->attempt($key, $config['max_attempts'], $config['decay']);
+                $endTime = microtime(true);
+                
+                $latency = ($endTime - $startTime) * 1000; // Convert to milliseconds
+                
+                // Collect latency with configurable sampling
+                $shouldSample = ($stats['total_requests'] % $this->options['latency_sample'] === 0);
+                
+                if ($shouldSample) {
+                    // Round to configurable precision and use as string key to avoid float->int conversion
+                    $roundedLatency = (string)round($latency, $this->options['latency_precision']);
+                    if (!isset($stats['latency_counters'][$roundedLatency])) {
+                        $stats['latency_counters'][$roundedLatency] = 0;
+                    }
+                    $stats['latency_counters'][$roundedLatency]++;
+                }
                 $stats['total_requests']++;
                 
                 if ($result->successful()) {
@@ -294,6 +339,7 @@ class StressTestRunner
             } catch (Exception $e) {
                 $stats['errors']++;
                 $stats['total_requests']++;
+                // Don't record latency for errors since the operation didn't complete normally
             }
             
             // Rate limiting to prevent overwhelming the system
@@ -315,7 +361,7 @@ class StressTestRunner
         $columnWidth = max(15, (60 / count($algorithms)));
         
         // Build format string dynamically based on number of algorithms
-        $format = "%-20s |";
+        $format = "%-22s |"; // Slightly wider for latency labels
         foreach ($algorithms as $alg) {
             $format .= sprintf(" %%-%ds |", $columnWidth);
         }
@@ -339,6 +385,11 @@ class StressTestRunner
             'Block Rate %' => ['block_rate', '%.2f%%'],
             'Error Rate %' => ['error_rate', '%.2f%%'],
             'Duration (s)' => ['duration', '%.2f'],
+            'Latency Avg (ms)' => ['latency_avg', '%.3f'],
+            'Latency P50 (ms)' => ['latency_p50', '%.3f'],
+            'Latency P95 (ms)' => ['latency_p95', '%.3f'],
+            'Latency P99 (ms)' => ['latency_p99', '%.3f'],
+            'Latency Max (ms)' => ['latency_max', '%.3f'],
         ];
         
         foreach ($metrics as $label => $config) {
@@ -484,6 +535,76 @@ class StressTestRunner
         
         return $maxProcs;
     }
+
+    private function calculateLatencyStatistics(array $latencyCounters): array
+    {
+        if (empty($latencyCounters)) {
+            return [];
+        }
+
+        // Convert counter data back to a weighted array for calculations
+        $allLatencies = [];
+        $totalSum = 0;
+        $totalCount = 0;
+
+        foreach ($latencyCounters as $latency => $count) {
+            $allLatencies[] = ['latency' => (float)$latency, 'count' => $count];
+            $totalSum += (float)$latency * $count;
+            $totalCount += $count;
+        }
+
+        // Sort by latency value
+        usort($allLatencies, fn($a, $b) => $a['latency'] <=> $b['latency']);
+
+        // Calculate basic statistics
+        $stats = [
+            'latency_avg' => $totalSum / $totalCount,
+            'latency_min' => $allLatencies[0]['latency'],
+            'latency_max' => $allLatencies[count($allLatencies) - 1]['latency']
+        ];
+
+        // Calculate percentiles using cumulative distribution
+        $stats['latency_p50'] = $this->calculateWeightedPercentile($allLatencies, $totalCount, 50);
+        $stats['latency_p95'] = $this->calculateWeightedPercentile($allLatencies, $totalCount, 95);
+        $stats['latency_p99'] = $this->calculateWeightedPercentile($allLatencies, $totalCount, 99);
+
+        return $stats;
+    }
+
+    private function calculateWeightedPercentile(array $sortedWeightedValues, int $totalCount, float $percentile): float
+    {
+        $targetCount = ($percentile / 100) * $totalCount;
+        $cumulative = 0;
+
+        foreach ($sortedWeightedValues as $item) {
+            $cumulative += $item['count'];
+            if ($cumulative >= $targetCount) {
+                return $item['latency'];
+            }
+        }
+
+        // Should never reach here, but return the max value as fallback
+        return $sortedWeightedValues[count($sortedWeightedValues) - 1]['latency'];
+    }
+
+    private function calculatePercentile(array $sortedValues, float $percentile): float
+    {
+        $count = count($sortedValues);
+        if ($count === 0) {
+            return 0.0;
+        }
+        
+        $index = ($percentile / 100) * ($count - 1);
+        $lower = floor($index);
+        $upper = ceil($index);
+        
+        if ($lower === $upper) {
+            return $sortedValues[$lower];
+        }
+        
+        $weight = $index - $lower;
+        return $sortedValues[$lower] * (1 - $weight) + $sortedValues[$upper] * $weight;
+    }
 }
 
 function showHelp(): void
@@ -505,14 +626,18 @@ function showHelp(): void
     echo "  --decay=SECONDS        Custom decay time for custom scenario\n";
     echo "  --verbose              Enable verbose output\n";
     echo "  --no-clear             Don't clear Redis between tests\n";
-    echo "  --max-speed            Performance mode: send requests as fast as possible (no throttling)\n\n";
+    echo "  --max-speed            Performance mode: send requests as fast as possible (no throttling)\n";
+    echo "  --latency-precision=N  Number of decimal places for latency rounding (default: 2)\n";
+    echo "  --latency-sample=N     Sample rate for latency collection - collect every Nth measurement (default: 1 = all measurements)\n\n";
     echo "Examples:\n";
     echo "  php stress-test.php --help\n";
     echo "  php stress-test.php --algorithms=sliding,gcra --duration=10\n";
     echo "  php stress-test.php --scenarios=high,medium --processes=10\n";
     echo "  php stress-test.php --keys=100 --max-attempts=50 --decay=30\n";
     echo "  php stress-test.php --scenarios=burst --algorithms=fixed\n";
-    echo "  php stress-test.php --max-speed --duration=5 --processes=4\n\n";
+    echo "  php stress-test.php --max-speed --duration=5 --processes=4\n";
+    echo "  php stress-test.php --latency-precision=5 --latency-sample=1 --algorithms=gcra\n";
+    echo "  php stress-test.php --latency-sample=100 --max-speed --duration=10\n\n";
     echo "Scenarios:\n";
     echo "  high    - High contention (5 keys, 100 req/key)\n";
     echo "  medium  - Medium contention (50 keys, 50 req/key)\n";
@@ -575,6 +700,12 @@ function parseArguments(): array
                     break;
                 case 'decay':
                     $options['custom_decay'] = (int)$value;
+                    break;
+                case 'latency-precision':
+                    $options['latency_precision'] = max(0, min(10, (int)$value)); // Clamp between 0-10
+                    break;
+                case 'latency-sample':
+                    $options['latency_sample'] = max(1, (int)$value); // Minimum 1 (collect all)
                     break;
             }
         } elseif ($arg === '--verbose') {
