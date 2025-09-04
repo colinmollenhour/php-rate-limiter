@@ -5,4 +5,4 @@
 !AGENTS.md
 composer.lock
 vendor
-
+.claude/*.local.*
