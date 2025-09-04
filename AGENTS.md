@@ -12,6 +12,11 @@ This is a standalone PHP library implementing multiple rate limiting algorithms 
 - `composer test` - Run all tests using PHPUnit
 - `./vendor/bin/phpunit` - Direct PHPUnit execution
 
+### Stress Testing
+- `php test-basic.php` - Basic functionality validation
+- `php stress-test.php` - Full comprehensive stress test with CLI options
+- `php stress-test.php --help` - Show all CLI options and usage examples
+
 ### Dependencies
 - Requires PHP ^8.0, Redis server running on localhost:6379 for tests
 - Uses `colinmollenhour/credis` for Redis connectivity
@@ -53,3 +58,23 @@ This is a standalone PHP library implementing multiple rate limiting algorithms 
 - Tests require Redis connection and use `flushdb()` for isolation
 - Separate test classes for each algorithm
 - Coverage tracking enabled for `src/` directory
+
+### Stress Testing Tools
+- **Multi-process testing** using `pcntl_fork()` for concurrent load simulation
+- **Comprehensive CLI interface** with configurable algorithms, scenarios, duration, processes
+- **Built-in scenarios**: high/medium/low contention + single-key burst test
+- **Custom scenarios** with `--keys=N --max-attempts=N --decay=N` parameters
+- **Performance metrics**: RPS, success/block/error rates, algorithm comparison
+- **Prerequisites**: Requires `pcntl` extension and Redis on localhost:6379
+
+### Stress Test CLI Examples
+```bash
+# Compare both algorithms on high contention (5 keys)
+php stress-test.php --scenarios=high --duration=10
+
+# Test only sliding window with custom parameters
+php stress-test.php --algorithms=sliding --keys=100 --max-attempts=50 --decay=30
+
+# Quick burst test comparison
+php stress-test.php --scenarios=burst --duration=5 --processes=5
+```

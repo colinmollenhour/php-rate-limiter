@@ -86,11 +86,113 @@ $fixedWindow = new \Cm\RateLimiter\FixedWindow\RateLimiter($redis);
 
 ## Testing
 
+### Unit Tests
 ```bash
 composer test
 ```
-
 Requires Redis running on `localhost:6379`.
+
+### Stress Testing
+
+Comprehensive stress testing tools are included to benchmark and compare algorithms under load.
+
+#### Test Files
+- `stress-test.php` - Full comprehensive stress test with CLI options
+- `test-basic.php` - Basic functionality validation
+
+#### Prerequisites
+1. **PHP Extensions Required:**
+   - `pcntl` - For multi-process testing
+   - `redis` or Credis library - For Redis connectivity
+
+2. **Redis Server:**
+   - Must be running on `localhost:6379`
+   - Will be cleared (`FLUSHDB`) during tests
+
+#### Running Stress Tests
+
+**Basic functionality validation:**
+```bash
+php test-basic.php
+```
+
+**Full stress test with CLI options:**
+```bash
+# Show help and all available options
+php stress-test.php --help
+
+# Default: All scenarios, both algorithms, 30s duration, 20 processes
+php stress-test.php
+
+# Test only sliding window algorithm with high contention for 10 seconds
+php stress-test.php --algorithms=sliding --scenarios=high --duration=10
+
+# Custom test with 100 keys, 50 max attempts, 5 second windows
+php stress-test.php --keys=100 --max-attempts=50 --decay=5 --duration=15
+
+# Quick comparison between algorithms on burst scenario
+php stress-test.php --scenarios=burst --duration=5 --processes=5
+
+# Test specific scenarios with verbose output
+php stress-test.php --scenarios=high,medium --verbose --duration=20
+```
+
+#### Test Scenarios
+
+1. **High Contention** (`--scenarios=high`) - 5 keys, tests algorithm behavior under high contention
+2. **Medium Contention** (`--scenarios=medium`) - 50 keys, balanced load testing  
+3. **Low Contention** (`--scenarios=low`) - 1000 keys, tests distributed load performance
+4. **Single Key Burst** (`--scenarios=burst`) - 1 key, extreme contention scenario
+5. **Custom** (`--keys=N`) - User-defined parameters
+
+#### CLI Options
+
+- `--algorithms=sliding,fixed` - Choose which algorithms to test
+- `--scenarios=high,medium,low,burst,all,custom` - Select test scenarios
+- `--duration=SECONDS` - Test duration (default: 30s)
+- `--processes=NUM` - Concurrent processes (default: 20)
+- `--keys=NUM` - Custom key count for custom scenarios
+- `--max-attempts=NUM` - Custom rate limit
+- `--decay=SECONDS` - Custom window size
+- `--verbose` - Detailed output
+- `--no-clear` - Keep Redis data between tests
+
+#### Metrics Collected
+
+For each algorithm and scenario:
+- **Total Requests** - Total attempts made
+- **Requests/sec (RPS)** - Throughput achieved  
+- **Success Rate %** - Requests allowed through
+- **Block Rate %** - Requests blocked by rate limiting
+- **Error Rate %** - System/Redis errors
+- **Duration** - Actual test execution time
+
+#### Expected Performance Characteristics
+
+**SlidingWindow Algorithm:**
+- More accurate rate limiting, fewer burst allowances
+- Higher memory usage (Redis sorted sets), slightly lower throughput
+- Best for precise rate limiting requirements
+
+**FixedWindow Algorithm:**
+- Lower memory usage, higher throughput, simpler Redis operations
+- Allows up to 2x burst at window boundaries
+- Best for high-performance scenarios where some burst is acceptable
+
+#### Troubleshooting
+
+**PCNTL Extension Missing:**
+```bash
+# Ubuntu/Debian
+sudo apt-get install php-pcntl
+```
+
+**Redis Connection Issues:**
+```bash
+redis-cli ping
+redis-cli config get bind
+redis-cli config get port
+```
 
 ## Architecture
 
