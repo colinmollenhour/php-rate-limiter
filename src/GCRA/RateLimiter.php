@@ -28,24 +28,29 @@ class RateLimiter implements RateLimiterInterface
         return $this->limiters[$name] ?? null;
     }
 
-    public function attempt(string $key, int $maxAttempts, int $decay = 60): RateLimiterResult
+    public function attempt(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): RateLimiterResult
     {
+        // For GCRA, we use smooth rate limiting (ignore burst capacity)
+        // Total requests = sustainedRate * window
+        $maxAttempts = (int)($sustainedRate * $window);
+        
         $keys = [$this->getKeyWithPrefix($key)];
-        $args = [$decay, $maxAttempts];
+        $args = [$window, $maxAttempts];
         [$retryAfter, $retriesLeft, $limit] = $this->redis->eval(LuaScripts::attempt(), $keys, $args);
 
         return new RateLimiterResult($retryAfter, $retriesLeft, $limit);
     }
 
-    public function tooManyAttempts(string $key, int $maxAttempts, int $decay = 60): bool
+    public function tooManyAttempts(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): bool
     {
-        return $this->availableIn($key, $maxAttempts, $decay) > 0;
+        $maxAttempts = (int)($sustainedRate * $window);
+        return $this->availableIn($key, $maxAttempts, $window) > 0;
     }
 
-    public function attempts(string $key, int $decay = 60): int
+    public function attempts(string $key, int $window = 60): int
     {
         $keys = [$this->getKeyWithPrefix($key)];
-        $args = [$decay, 1]; // For attempts calculation, we use limit=1 as baseline
+        $args = [$window, 1]; // For attempts calculation, we use limit=1 as baseline
 
         return $this->redis->eval(LuaScripts::attempts(), $keys, $args);
     }
@@ -58,9 +63,10 @@ class RateLimiter implements RateLimiterInterface
         return $this->redis->eval(LuaScripts::resetAttempts(), $keys, $args);
     }
 
-    public function remaining(string $key, int $maxAttempts, int $decay = 60): int
+    public function remaining(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): int
     {
-        $attempts = $this->attempts($key, $decay);
+        $maxAttempts = (int)($sustainedRate * $window);
+        $attempts = $this->attempts($key, $window);
         return max(0, $maxAttempts - $attempts);
     }
 
@@ -69,17 +75,18 @@ class RateLimiter implements RateLimiterInterface
         $this->resetAttempts($key);
     }
 
-    public function availableIn(string $key, int $maxAttempts, int $decay = 60): int
+    public function availableIn(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): int
     {
+        $maxAttempts = (int)($sustainedRate * $window);
         $keys = [$this->getKeyWithPrefix($key)];
-        $args = [$decay, $maxAttempts];
+        $args = [$window, $maxAttempts];
 
         return $this->redis->eval(LuaScripts::availableIn(), $keys, $args);
     }
 
-    public function retriesLeft(string $key, int $maxAttempts, int $decay = 60): int
+    public function retriesLeft(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): int
     {
-        return $this->remaining($key, $maxAttempts, $decay);
+        return $this->remaining($key, $burstCapacity, $sustainedRate, $window);
     }
 
     private function getKeyWithPrefix(string $key): string

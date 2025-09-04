@@ -9,42 +9,34 @@ class LuaScripts
         return <<<'LUA'
             local current_time = redis.call('TIME')
             local key = KEYS[1]
-            local refill_period = tonumber(ARGV[1])
-            local max_tokens = tonumber(ARGV[2])
+            local sustained_rate = tonumber(ARGV[1])  -- requests per second
+            local max_tokens = tonumber(ARGV[2])      -- burst capacity
             local current_timestamp = tonumber(current_time[1])
+            local refill_period = 1.0 / sustained_rate  -- seconds per token
             
-            local bucket = redis.call('HMGET', key, 'tokens', 'last_refill', 'attempts', 'window_start')
+            local bucket = redis.call('HMGET', key, 'tokens', 'last_refill')
             local tokens = tonumber(bucket[1]) or max_tokens
             local last_refill = tonumber(bucket[2]) or current_timestamp
-            local attempts = tonumber(bucket[3]) or 0
-            local window_start = tonumber(bucket[4]) or current_timestamp
             
             -- Calculate tokens to add based on time elapsed
             local time_passed = current_timestamp - last_refill
-            local tokens_to_add = math.floor(time_passed * max_tokens / refill_period)
+            local tokens_to_add = math.floor(time_passed / refill_period)
             local new_tokens = math.min(max_tokens, tokens + tokens_to_add)
-            
-            -- Reset attempts if we've moved to a new window (refill period elapsed)
-            if time_passed >= refill_period then
-                attempts = 0
-                window_start = current_timestamp
-            end
             
             if new_tokens < 1 then
                 -- No tokens available
-                local time_until_token = math.ceil(refill_period / max_tokens)
+                local time_until_token = refill_period - (time_passed % refill_period)
                 return {time_until_token, 0, max_tokens}
             end
             
-            -- Consume one token and increment attempts
+            -- Consume one token
             new_tokens = new_tokens - 1
-            attempts = attempts + 1
             
-            -- Update bucket state
-            redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill', current_timestamp, 'attempts', attempts, 'window_start', window_start)
-            redis.call('EXPIRE', key, refill_period * 2)
+            -- Update bucket state and track attempts
+            redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill', current_timestamp, 'max_tokens', max_tokens, 'attempts', (redis.call('HGET', key, 'attempts') or 0) + 1)
+            redis.call('EXPIRE', key, math.max(3600, refill_period * max_tokens * 2))
             
-            local retries_left = max_tokens - attempts
+            local retries_left = new_tokens
             return {0, retries_left, max_tokens}
 LUA;
     }
@@ -54,20 +46,40 @@ LUA;
         return <<<'LUA'
             local current_time = redis.call('TIME')
             local key = KEYS[1]
-            local refill_period = tonumber(ARGV[1])
+            local window = tonumber(ARGV[1])
             local current_timestamp = tonumber(current_time[1])
             
-            local bucket = redis.call('HMGET', key, 'attempts', 'window_start')
-            local attempts = tonumber(bucket[1]) or 0
-            local window_start = tonumber(bucket[2]) or current_timestamp
+            -- Return actual tracked attempts
+            local attempts = tonumber(redis.call('HGET', key, 'attempts'))
+            return attempts or 0
+LUA;
+    }
+
+    public static function tokensRemaining(): string
+    {
+        return <<<'LUA'
+            local current_time = redis.call('TIME')
+            local key = KEYS[1]
+            local sustained_rate = tonumber(ARGV[1])
+            local max_tokens = tonumber(ARGV[2])
+            local current_timestamp = tonumber(current_time[1])
+            local refill_period = 1.0 / sustained_rate
             
-            -- Reset attempts if we've moved to a new window (refill period elapsed)
-            local time_passed = current_timestamp - window_start
-            if time_passed >= refill_period then
-                attempts = 0
+            local bucket = redis.call('HMGET', key, 'tokens', 'last_refill')
+            local tokens = tonumber(bucket[1]) or max_tokens
+            local last_refill = tonumber(bucket[2]) or current_timestamp
+            
+            -- Calculate tokens to add based on time elapsed
+            local time_passed = current_timestamp - last_refill
+            local tokens_to_add = math.floor(time_passed / refill_period)
+            local new_tokens = math.min(max_tokens, tokens + tokens_to_add)
+            
+            local retry_after = 0
+            if new_tokens < 1 then
+                retry_after = refill_period - (time_passed % refill_period)
             end
             
-            return attempts
+            return {retry_after, new_tokens}
 LUA;
     }
 
@@ -76,9 +88,10 @@ LUA;
         return <<<'LUA'
             local current_time = redis.call('TIME')
             local key = KEYS[1]
-            local refill_period = tonumber(ARGV[1])
+            local sustained_rate = tonumber(ARGV[1])
             local max_tokens = tonumber(ARGV[2])
             local current_timestamp = tonumber(current_time[1])
+            local refill_period = 1.0 / sustained_rate
             
             local bucket = redis.call('HMGET', key, 'tokens', 'last_refill')
             local tokens = tonumber(bucket[1]) or max_tokens
@@ -86,7 +99,7 @@ LUA;
             
             -- Calculate tokens to add based on time elapsed
             local time_passed = current_timestamp - last_refill
-            local tokens_to_add = math.floor(time_passed * max_tokens / refill_period)
+            local tokens_to_add = math.floor(time_passed / refill_period)
             tokens = math.min(max_tokens, tokens + tokens_to_add)
             
             if tokens >= 1 then
@@ -94,7 +107,7 @@ LUA;
             end
             
             -- Calculate time until next token
-            return math.ceil(refill_period / max_tokens)
+            return refill_period - (time_passed % refill_period)
 LUA;
     }
 
@@ -102,7 +115,8 @@ LUA;
     {
         return <<<'LUA'
             local key = KEYS[1]
-            return redis.call('DEL', key)
+            local deleted = redis.call('DEL', key)
+            return deleted
 LUA;
     }
 }

@@ -1,6 +1,6 @@
 # Cm\RateLimiter
 
-A flexible PHP library implementing 5 different rate limiting algorithms using Redis. Includes comprehensive performance testing and supports Redis alternatives like Dragonfly, KeyDB, and Valkey.
+A flexible PHP library implementing 5 different rate limiting algorithms using Redis with **enhanced API supporting separate burst capacity and sustained rates**. Includes comprehensive performance testing and supports Redis alternatives like Dragonfly, KeyDB, and Valkey.
 
 > **Note:** This is a standalone fork of [bvtterfly/sliding-window-rate-limiter](https://github.com/bvtterfly/sliding-window-rate-limiter), refactored to remove Laravel dependencies and support multiple algorithms.
 
@@ -29,8 +29,8 @@ $factory = new RateLimiterFactory($redis);
 // Choose your algorithm
 $rateLimiter = $factory->createSlidingWindow(); // or createFixedWindow(), createLeakyBucket(), createGCRA(), createTokenBucket()
 
-// Rate limit: 10 requests per 60 seconds
-$result = $rateLimiter->attempt('user:123', 10, 60);
+// Rate limit: 10 burst capacity, 1 request/second sustained, 60 second window
+$result = $rateLimiter->attempt('user:123', 10, 1.0, 60);
 
 if ($result->successful()) {
     echo "Request allowed. {$result->retriesLeft} requests remaining";
@@ -41,43 +41,48 @@ if ($result->successful()) {
 
 ## Algorithms
 
-| Algorithm | Accuracy | Memory | Burst Protection | Performance | Best For |
-|-----------|----------|---------|------------------|-------------|-----------|
-| **Sliding Window** | High | Higher | Excellent | Good | APIs requiring smooth rate limiting |
-| **Fixed Window** | Medium | Lower | Poor | Excellent | High-traffic applications |
-| **Leaky Bucket** | High | Medium | Good | Good | Traffic spike handling with average rate control |
-| **GCRA** | High | Lower | Excellent | Excellent | Memory-efficient smooth rate limiting |
-| **Token Bucket** | High | Medium | Good | Excellent | Burst-tolerant with gradual refill |
+| Algorithm | Accuracy | Memory | Burst Support | Performance | Best For |
+|-----------|----------|---------|---------------|-------------|-----------|
+| **Sliding Window** | High | Higher | Configurable (smooth rate) | Good | APIs requiring smooth rate limiting |
+| **Fixed Window** | Medium | Lower | Full (window limit) | Excellent | High-traffic applications |
+| **Leaky Bucket** | High | Medium | Full (bucket capacity) | Good | Traffic spike handling with average rate control |
+| **GCRA** | High | Lower | Configurable (smooth rate) | Excellent | Memory-efficient smooth rate limiting |
+| **Token Bucket** | High | Medium | **Perfect** (burst + refill) | Excellent | Burst-tolerant APIs with gradual refill |
 
 ### Sliding Window
-- **How it works**: Tracks individual request timestamps using Redis sorted sets
-- **Pros**: Precise rate limiting, no burst issues
-- **Cons**: Higher memory usage
-- **Use when**: You need accurate rate limiting without bursts
+- **How it works**: Tracks individual request timestamps using Redis sorted sets, smooths traffic over time
+- **Burst behavior**: Ignores burst capacity parameter, provides smooth rate limiting based on sustained rate
+- **Pros**: Precise rate limiting, smooth traffic distribution
+- **Cons**: Higher memory usage, no true burst support
+- **Use when**: You need accurate, smooth rate limiting
 
 ### Fixed Window  
 - **How it works**: Simple counter per time window, resets at interval boundaries
-- **Pros**: Memory efficient, high performance
-- **Cons**: Allows up to 2x burst at window boundaries (e.g., 100 requests at 11:59 + 100 at 12:01)
-- **Use when**: High traffic, occasional bursts acceptable
+- **Burst behavior**: Uses burst capacity as the window limit, ignores sustained rate parameter
+- **Pros**: Memory efficient, high performance, allows full burst at window start
+- **Cons**: Can allow up to 2x burst at window boundaries (e.g., 100 requests at 11:59 + 100 at 12:01)
+- **Use when**: High traffic where burst at window boundaries is acceptable
 
 ### Leaky Bucket
 - **How it works**: Simulates a bucket that leaks at a constant rate, requests fill the bucket
-- **Pros**: Allows burst up to capacity, enforces average rate, accommodates traffic spikes
+- **Burst behavior**: Uses burst capacity as bucket size, ignores sustained rate (leak rate fixed at capacity/window)
+- **Pros**: Allows initial burst up to capacity, enforces steady leak rate, accommodates traffic spikes
 - **Cons**: More complex than fixed window, moderate memory usage
-- **Use when**: Need burst tolerance while maintaining long-term average rate limits
+- **Use when**: Need burst tolerance while maintaining steady average rate
 
 ### GCRA (Generic Cell Rate Algorithm)
 - **How it works**: Uses theoretical arrival time (TAT) to lazily compute when next request can be made
+- **Burst behavior**: Ignores burst capacity, provides smooth rate limiting based on sustained rate
 - **Pros**: Very memory efficient (single value per key), smooth rate limiting, precise control, **highest performance**
-- **Cons**: More complex algorithm, requires understanding of TAT concept
+- **Cons**: More complex algorithm, no true burst support
 - **Use when**: Need memory-efficient rate limiting with smooth, predictable behavior, or maximum performance
 
 ### Token Bucket
 - **How it works**: A bucket holds tokens that are consumed by requests and refilled at a constant rate
-- **Pros**: Allows bursts up to bucket capacity, intuitive model, gradual refill prevents starvation
+- **Burst behavior**: **Perfect implementation** - supports both burst capacity (initial tokens) and sustained rate (refill rate)
+- **Pros**: True burst + sustained rate support, allows bursts up to capacity, intuitive model, gradual refill prevents starvation
 - **Cons**: More memory usage than GCRA, moderate complexity
-- **Use when**: Need burst tolerance with predictable refill behavior, web APIs with bursty traffic patterns
+- **Use when**: Need true burst tolerance with separate sustained rate control, web APIs with bursty traffic patterns
 
 ## Performance Comparison
 
@@ -93,23 +98,65 @@ Based on max-speed benchmarking (requests/second with no throttling):
 
 > **Key Insight**: GCRA offers the lowest memory usage, highest performance, AND lowest latency (~3x faster than other algorithms), making it ideal for high-scale applications.
 
-## API Reference
+## Enhanced API with Burst + Sustained Rate Support
+
+This library provides a powerful API that separates **burst capacity** from **sustained rate**, giving you fine-grained control over rate limiting behavior.
 
 ### Core Methods
 ```php
-$result = $rateLimiter->attempt($key, $maxAttempts, $decaySeconds);
-$count = $rateLimiter->attempts($key, $decaySeconds);
-$remaining = $rateLimiter->remaining($key, $maxAttempts, $decaySeconds);
+// Enhanced API: attempt(key, burstCapacity, sustainedRate, window)
+$result = $rateLimiter->attempt('user:123', 10, 1.0, 60);
+// Allows: 10 requests immediately (burst), then 1 request/second (sustained)
+
+$count = $rateLimiter->attempts($key, $window);
+$remaining = $rateLimiter->remaining($key, $burstCapacity, $sustainedRate, $window);
+$availableIn = $rateLimiter->availableIn($key, $burstCapacity, $sustainedRate, $window);
 $rateLimiter->resetAttempts($key);
+```
+
+### API Parameters
+- **`$key`**: Unique identifier for the rate limit (e.g., 'user:123', 'api:endpoint')
+- **`$burstCapacity`**: Maximum requests allowed immediately (burst)
+- **`$sustainedRate`**: Requests per second for sustained traffic (float)
+- **`$window`**: Time window in seconds (default: 60)
+
+### Algorithm-Specific Behavior
+
+#### Token Bucket (Perfect Burst + Sustained)
+```php
+$tokenBucket = $factory->createTokenBucket();
+// 5 requests immediately, then 2 requests/second
+$result = $tokenBucket->attempt('user:123', 5, 2.0, 60);
+```
+
+#### Fixed Window (Burst as Window Limit)
+```php
+$fixedWindow = $factory->createFixedWindow();
+// 100 requests per 60-second window (sustained rate ignored)
+$result = $fixedWindow->attempt('user:123', 100, 1.0, 60);
+```
+
+#### Sliding Window & GCRA (Smooth Rate)
+```php
+$slidingWindow = $factory->createSlidingWindow();
+// Smooth rate limiting at 10 requests/minute (burst ignored)
+$result = $slidingWindow->attempt('user:123', 10, 10.0/60, 60);
+```
+
+#### Leaky Bucket (Burst as Capacity)
+```php
+$leakyBucket = $factory->createLeakyBucket();
+// 20 request capacity, leaks at 20/window rate (sustained rate ignored)
+$result = $leakyBucket->attempt('user:123', 20, 1.0, 60);
 ```
 
 ### Factory Methods
 ```php
-$factory->createSlidingWindow();
-$factory->createFixedWindow();
-$factory->createLeakyBucket();
-$factory->createGCRA();
-$factory->createTokenBucket();
+$factory->createSlidingWindow();  // Smooth rate limiting
+$factory->createFixedWindow();    // Window-based with burst
+$factory->createLeakyBucket();    // Bucket capacity with leak
+$factory->createGCRA();           // Memory-efficient smooth limiting
+$factory->createTokenBucket();    // Perfect burst + sustained rate
 ```
 
 ### Direct Instantiation
@@ -119,6 +166,46 @@ $fixedWindow = new \Cm\RateLimiter\FixedWindow\RateLimiter($redis);
 $leakyBucket = new \Cm\RateLimiter\LeakyBucket\RateLimiter($redis);
 $gcra = new \Cm\RateLimiter\GCRA\RateLimiter($redis);
 $tokenBucket = new \Cm\RateLimiter\TokenBucket\RateLimiter($redis);
+```
+
+### Result Object
+```php
+class RateLimiterResult {
+    public function successful(): bool;     // Was the request allowed?
+    public int $retryAfter;                // Seconds until next request allowed
+    public int $retriesLeft;               // Requests remaining in current window
+    public int $limit;                     // Total limit (burst capacity)
+}
+```
+
+## Common Use Cases
+
+### Web API with Burst Tolerance
+```php
+$tokenBucket = $factory->createTokenBucket();
+// Allow 20 requests immediately, then 5 requests/second
+$result = $tokenBucket->attempt("api:{$userId}", 20, 5.0, 60);
+```
+
+### Smooth Rate Limiting
+```php
+$slidingWindow = $factory->createSlidingWindow();
+// Smooth 100 requests per hour (no bursts)
+$result = $slidingWindow->attempt("user:{$id}", 100, 100.0/3600, 3600);
+```
+
+### High-Performance with Acceptable Bursts
+```php
+$fixedWindow = $factory->createFixedWindow();
+// 1000 requests per minute window
+$result = $fixedWindow->attempt("endpoint:{$route}", 1000, 1.0, 60);
+```
+
+### Memory-Efficient Smooth Limiting
+```php
+$gcra = $factory->createGCRA();
+// 50 requests per minute, smooth distribution
+$result = $gcra->attempt("service:{$key}", 50, 50.0/60, 60);
 ```
 
 ## Testing
@@ -303,3 +390,20 @@ Clean, extensible design with pluggable algorithms:
 - Algorithm implementations in separate namespaces
 
 Each algorithm uses atomic Redis operations via Lua scripts for consistency and performance.
+
+## Choosing the Right Algorithm
+
+### Need True Burst + Sustained Rate Control?
+**→ Use Token Bucket** - The only algorithm that properly implements both parameters.
+
+### Need Maximum Performance?
+**→ Use GCRA** - Highest throughput (~2x faster) with lowest memory usage.
+
+### Need Smooth Rate Limiting?
+**→ Use Sliding Window or GCRA** - Both provide smooth traffic distribution without burst spikes.
+
+### Need Simple High-Performance Solution?
+**→ Use Fixed Window** - Lowest complexity, highest throughput after GCRA, acceptable burst behavior.
+
+### Need Burst with Average Rate Control?
+**→ Use Leaky Bucket** - Good balance of burst tolerance and average rate enforcement.

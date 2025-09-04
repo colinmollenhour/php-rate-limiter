@@ -52,7 +52,7 @@ class RateLimiterFactoryTest extends TestCase
         $rateLimiter = $this->factory->createSlidingWindow();
         
         // Test that the created rate limiter actually works
-        $result = $rateLimiter->attempt('sliding-factory-test', 5, 30);
+        $result = $rateLimiter->attempt('sliding-factory-test', 5, 5.0/30, 30);
         $this->assertTrue($result->successful());
         $this->assertEquals(4, $result->retriesLeft);
     }
@@ -62,7 +62,7 @@ class RateLimiterFactoryTest extends TestCase
         $rateLimiter = $this->factory->createFixedWindow();
         
         // Test that the created rate limiter actually works
-        $result = $rateLimiter->attempt('fixed-factory-test', 5, 30);
+        $result = $rateLimiter->attempt('fixed-factory-test', 5, 1.0, 30);
         $this->assertTrue($result->successful());
         $this->assertEquals(4, $result->retriesLeft);
     }
@@ -80,7 +80,7 @@ class RateLimiterFactoryTest extends TestCase
         $rateLimiter = $this->factory->createLeakyBucket();
         
         // Test that the created rate limiter actually works
-        $result = $rateLimiter->attempt('leaky-factory-test', 5, 30);
+        $result = $rateLimiter->attempt('leaky-factory-test', 5, 1.0, 30);
         $this->assertTrue($result->successful());
         $this->assertEquals(4, $result->retriesLeft);
     }
@@ -98,7 +98,7 @@ class RateLimiterFactoryTest extends TestCase
         $rateLimiter = $this->factory->createGCRA();
         
         // Test that the created rate limiter actually works
-        $result = $rateLimiter->attempt('gcra-factory-test', 5, 30);
+        $result = $rateLimiter->attempt('gcra-factory-test', 5, 5.0/30, 30);
         $this->assertTrue($result->successful());
         $this->assertGreaterThanOrEqual(0, $result->retriesLeft);
     }
@@ -116,7 +116,7 @@ class RateLimiterFactoryTest extends TestCase
         $rateLimiter = $this->factory->createTokenBucket();
         
         // Test that the created rate limiter actually works
-        $result = $rateLimiter->attempt('token-bucket-factory-test', 5, 30);
+        $result = $rateLimiter->attempt('token-bucket-factory-test', 5, 1.0, 30);
         $this->assertTrue($result->successful());
         $this->assertEquals(4, $result->retriesLeft);
     }
@@ -130,11 +130,11 @@ class RateLimiterFactoryTest extends TestCase
         $tokenBucket = $this->factory->createTokenBucket();
         
         // Use the same key but different algorithms - they should be independent
-        $slidingResult = $slidingWindow->attempt('independence-test', 5, 30);
-        $fixedResult = $fixedWindow->attempt('independence-test', 5, 30);
-        $leakyResult = $leakyBucket->attempt('independence-test', 5, 30);
-        $gcraResult = $gcra->attempt('independence-test', 5, 30);
-        $tokenResult = $tokenBucket->attempt('independence-test', 5, 30);
+        $slidingResult = $slidingWindow->attempt('independence-test', 5, 5.0/30, 30);
+        $fixedResult = $fixedWindow->attempt('independence-test', 5, 1.0, 30);
+        $leakyResult = $leakyBucket->attempt('independence-test', 5, 1.0, 30);
+        $gcraResult = $gcra->attempt('independence-test', 5, 5.0/30, 30);
+        $tokenResult = $tokenBucket->attempt('independence-test', 5, 1.0, 30);
         
         $this->assertTrue($slidingResult->successful());
         $this->assertTrue($fixedResult->successful());

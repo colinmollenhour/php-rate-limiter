@@ -30,7 +30,7 @@ class GCRARateLimiterTest extends TestCase
 
     public function testSuccessfulAttempt(): void
     {
-        $result = $this->rateLimiter->attempt('test-key', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key', 10, 10.0/60, 60);
         
         $this->assertInstanceOf(RateLimiterResult::class, $result);
         $this->assertTrue($result->successful());
@@ -43,11 +43,11 @@ class GCRARateLimiterTest extends TestCase
     {
         // Make many rapid attempts to fill up the TAT
         for ($i = 0; $i < 15; $i++) {
-            $this->rateLimiter->attempt('test-key-limit', 10, 10);
+            $this->rateLimiter->attempt('test-key-limit', 10, 10.0/10, 10);
         }
 
         // Additional attempts should be rate limited
-        $result = $this->rateLimiter->attempt('test-key-limit', 10, 10);
+        $result = $this->rateLimiter->attempt('test-key-limit', 10, 10.0/10, 10);
         
         $this->assertFalse($result->successful());
         $this->assertGreaterThan(0, $result->retryAfter);
@@ -59,18 +59,18 @@ class GCRARateLimiterTest extends TestCase
     {
         $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
+        $this->rateLimiter->attempt('test-attempts', 10, 10.0/60, 60);
         $attempts = $this->rateLimiter->attempts('test-attempts', 60);
         $this->assertGreaterThanOrEqual(0, $attempts);
     }
 
     public function testRemainingAttempts(): void
     {
-        $remaining = $this->rateLimiter->remaining('test-remaining', 10, 60);
+        $remaining = $this->rateLimiter->remaining('test-remaining', 10, 10.0/60, 60);
         $this->assertGreaterThanOrEqual(0, $remaining);
         
-        $this->rateLimiter->attempt('test-remaining', 10, 60);
-        $newRemaining = $this->rateLimiter->remaining('test-remaining', 10, 60);
+        $this->rateLimiter->attempt('test-remaining', 10, 10.0/60, 60);
+        $newRemaining = $this->rateLimiter->remaining('test-remaining', 10, 10.0/60, 60);
         $this->assertGreaterThanOrEqual(0, $newRemaining);
     }
 
@@ -78,7 +78,7 @@ class GCRARateLimiterTest extends TestCase
     {
         // Make some requests to build up TAT
         for ($i = 0; $i < 5; $i++) {
-            $this->rateLimiter->attempt('test-reset', 10, 60);
+            $this->rateLimiter->attempt('test-reset', 10, 10.0/60, 60);
         }
         
         // Reset should clear the TAT
@@ -86,7 +86,7 @@ class GCRARateLimiterTest extends TestCase
         $this->assertEquals(0, $this->rateLimiter->attempts('test-reset', 60));
         
         // Should be able to make requests again
-        $result = $this->rateLimiter->attempt('test-reset', 10, 60);
+        $result = $this->rateLimiter->attempt('test-reset', 10, 10.0/60, 60);
         $this->assertTrue($result->successful());
     }
 
@@ -94,7 +94,7 @@ class GCRARateLimiterTest extends TestCase
     {
         // Make some requests to build up TAT
         for ($i = 0; $i < 5; $i++) {
-            $this->rateLimiter->attempt('test-clear', 10, 60);
+            $this->rateLimiter->attempt('test-clear', 10, 10.0/60, 60);
         }
         
         // Clear should reset the TAT
@@ -102,7 +102,7 @@ class GCRARateLimiterTest extends TestCase
         $this->assertEquals(0, $this->rateLimiter->attempts('test-clear', 60));
         
         // Should be able to make requests again
-        $result = $this->rateLimiter->attempt('test-clear', 10, 60);
+        $result = $this->rateLimiter->attempt('test-clear', 10, 10.0/60, 60);
         $this->assertTrue($result->successful());
     }
 
@@ -124,10 +124,10 @@ class GCRARateLimiterTest extends TestCase
         $limit = 5;
         $period = 10; // 10 seconds
         
-        // Make requests rapidly - should work initially
+        // Make requests rapidly - should work initially (use higher rate)
         $successCount = 0;
         for ($i = 0; $i < $limit; $i++) {
-            $result = $this->rateLimiter->attempt($key, $limit, $period);
+            $result = $this->rateLimiter->attempt($key, $limit, 5.0, $period); // 5 req/sec
             if ($result->successful()) {
                 $successCount++;
             }
@@ -136,7 +136,7 @@ class GCRARateLimiterTest extends TestCase
         $this->assertGreaterThan(0, $successCount, 'Should allow some initial requests');
         
         // Additional rapid requests should be rate limited
-        $result = $this->rateLimiter->attempt($key, $limit, $period);
+        $result = $this->rateLimiter->attempt($key, $limit, 5.0, $period);
         if (!$result->successful()) {
             $this->assertGreaterThan(0, $result->retryAfter, 'Should provide retry after time');
         }
@@ -145,22 +145,22 @@ class GCRARateLimiterTest extends TestCase
     public function testAvailableIn(): void
     {
         // Initially should be available immediately
-        $this->assertEquals(0, $this->rateLimiter->availableIn('test-available', 5, 60));
+        $this->assertEquals(0, $this->rateLimiter->availableIn('test-available', 5, 5.0/60, 60));
         
         // After making requests, may need to wait
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-available', 5, 10);
+            $this->rateLimiter->attempt('test-available', 5, 5.0/10, 10);
         }
         
-        $availableIn = $this->rateLimiter->availableIn('test-available', 5, 10);
+        $availableIn = $this->rateLimiter->availableIn('test-available', 5, 5.0/10, 10);
         $this->assertGreaterThanOrEqual(0, $availableIn);
     }
 
     public function testKeyIsolation(): void
     {
         // Test that different keys have independent TAT values
-        $this->rateLimiter->attempt('key1', 5, 60);
-        $this->rateLimiter->attempt('key2', 5, 60);
+        $this->rateLimiter->attempt('key1', 5, 5.0/60, 60);
+        $this->rateLimiter->attempt('key2', 5, 5.0/60, 60);
         
         // Reset one key
         $this->rateLimiter->resetAttempts('key1');
@@ -173,15 +173,15 @@ class GCRARateLimiterTest extends TestCase
     public function testTooManyAttemptsMethod(): void
     {
         // Initially should not have too many attempts
-        $this->assertFalse($this->rateLimiter->tooManyAttempts('test-too-many', 5, 60));
+        $this->assertFalse($this->rateLimiter->tooManyAttempts('test-too-many', 5, 5.0/60, 60));
         
         // After many rapid requests, should indicate too many attempts
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-too-many', 5, 10);
+            $this->rateLimiter->attempt('test-too-many', 5, 5.0/10, 10);
         }
         
         // May or may not be true depending on timing, but should not error
-        $tooMany = $this->rateLimiter->tooManyAttempts('test-too-many', 5, 10);
+        $tooMany = $this->rateLimiter->tooManyAttempts('test-too-many', 5, 5.0/10, 10);
         $this->assertIsBool($tooMany);
     }
 
@@ -192,7 +192,7 @@ class GCRARateLimiterTest extends TestCase
         
         // Make multiple requests
         for ($i = 0; $i < 5; $i++) {
-            $this->rateLimiter->attempt($key, 10, 60);
+            $this->rateLimiter->attempt($key, 10, 10.0/60, 60);
         }
         
         // Check that only one Redis key exists for this rate limiter key

@@ -30,7 +30,7 @@ class LeakyBucketRateLimiterTest extends TestCase
 
     public function testSuccessfulAttempt(): void
     {
-        $result = $this->rateLimiter->attempt('test-key', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key', 10, 1.0, 60);
         
         $this->assertInstanceOf(RateLimiterResult::class, $result);
         $this->assertTrue($result->successful());
@@ -43,11 +43,11 @@ class LeakyBucketRateLimiterTest extends TestCase
     {
         // Make 10 attempts (the limit)
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-key-limit', 10, 60);
+            $this->rateLimiter->attempt('test-key-limit', 10, 1.0, 60);
         }
 
         // The 11th attempt should fail
-        $result = $this->rateLimiter->attempt('test-key-limit', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key-limit', 10, 1.0, 60);
         
         $this->assertFalse($result->successful());
         $this->assertGreaterThan(0, $result->retryAfter);
@@ -57,39 +57,39 @@ class LeakyBucketRateLimiterTest extends TestCase
 
     public function testAttemptCount(): void
     {
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 1.0, 60);
+        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts', 60));
     }
 
     public function testRemainingAttempts(): void
     {
-        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 1.0, 60));
         
-        $this->rateLimiter->attempt('test-remaining', 10, 60);
-        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->rateLimiter->attempt('test-remaining', 10, 1.0, 60);
+        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 1.0, 60));
     }
 
     public function testResetAttempts(): void
     {
-        $this->rateLimiter->attempt('test-reset', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset'));
+        $this->rateLimiter->attempt('test-reset', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset', 60));
         
         $this->rateLimiter->resetAttempts('test-reset');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset', 60));
     }
 
     public function testClearAttempts(): void
     {
-        $this->rateLimiter->attempt('test-clear', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear'));
+        $this->rateLimiter->attempt('test-clear', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear', 60));
         
         $this->rateLimiter->clear('test-clear');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear', 60));
     }
 
     public function testLimiterRegistration(): void
@@ -107,19 +107,19 @@ class LeakyBucketRateLimiterTest extends TestCase
     {
         // Fill the bucket to capacity (5 requests)
         for ($i = 0; $i < 5; $i++) {
-            $result = $this->rateLimiter->attempt('test-leak', 5, 10);
+            $result = $this->rateLimiter->attempt('test-leak', 5, 1.0, 10);
             $this->assertTrue($result->successful(), "Request $i should succeed");
         }
         
         // Next request should fail
-        $result = $this->rateLimiter->attempt('test-leak', 5, 10);
+        $result = $this->rateLimiter->attempt('test-leak', 5, 1.0, 10);
         $this->assertFalse($result->successful(), "Bucket should be full");
         
         // Wait for leak (leak rate is 10/5 = 2 seconds per request)
         sleep(3);
         
         // Should be able to make another request now
-        $result = $this->rateLimiter->attempt('test-leak', 5, 10);
+        $result = $this->rateLimiter->attempt('test-leak', 5, 1.0, 10);
         $this->assertTrue($result->successful(), "Should succeed after leak");
     }
 
@@ -127,12 +127,12 @@ class LeakyBucketRateLimiterTest extends TestCase
     {
         // LeakyBucket allows filling the entire capacity at once
         for ($i = 0; $i < 3; $i++) {
-            $result = $this->rateLimiter->attempt('test-burst', 3, 6);
+            $result = $this->rateLimiter->attempt('test-burst', 3, 1.0, 6);
             $this->assertTrue($result->successful(), "Burst request $i should succeed");
         }
         
         // Next request should fail immediately
-        $result = $this->rateLimiter->attempt('test-burst', 3, 6);
+        $result = $this->rateLimiter->attempt('test-burst', 3, 1.0, 6);
         $this->assertFalse($result->successful(), "Should fail when bucket is full");
     }
 }

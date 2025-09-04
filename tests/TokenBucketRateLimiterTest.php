@@ -30,7 +30,7 @@ class TokenBucketRateLimiterTest extends TestCase
 
     public function testSuccessfulAttempt(): void
     {
-        $result = $this->rateLimiter->attempt('test-key', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key', 10, 1.0, 60);
         
         $this->assertInstanceOf(RateLimiterResult::class, $result);
         $this->assertTrue($result->successful());
@@ -43,11 +43,11 @@ class TokenBucketRateLimiterTest extends TestCase
     {
         // Make 10 attempts rapidly (should consume all tokens)
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-key-limit', 10, 60);
+            $this->rateLimiter->attempt('test-key-limit', 10, 1.0, 60);
         }
 
         // The 11th attempt should fail
-        $result = $this->rateLimiter->attempt('test-key-limit', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key-limit', 10, 1.0, 60);
         
         $this->assertFalse($result->successful());
         $this->assertGreaterThan(0, $result->retryAfter);
@@ -59,57 +59,57 @@ class TokenBucketRateLimiterTest extends TestCase
     {
         // Use up all tokens
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-refill', 10, 60);
+            $this->rateLimiter->attempt('test-refill', 10, 1.0, 60);
         }
 
         // Should be out of tokens
-        $result = $this->rateLimiter->attempt('test-refill', 10, 60);
+        $result = $this->rateLimiter->attempt('test-refill', 10, 1.0, 60);
         $this->assertFalse($result->successful());
 
         // Wait a bit for tokens to refill (simulate time passing)
         // In a real test environment, you might want to mock time or use Redis TIME manipulation
-        sleep(7); // Wait 7 seconds, should get 1 token back (60s/10 tokens = 6s per token)
+        sleep(2); // Wait 2 seconds, should get 2 tokens back (1 req/sec)
 
         // Should now have a token available
-        $result = $this->rateLimiter->attempt('test-refill', 10, 60);
+        $result = $this->rateLimiter->attempt('test-refill', 10, 1.0, 60);
         $this->assertTrue($result->successful());
     }
 
     public function testAttemptCount(): void
     {
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 1.0, 60);
+        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts', 60));
     }
 
     public function testRemainingAttempts(): void
     {
-        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 1.0, 60));
         
-        $this->rateLimiter->attempt('test-remaining', 10, 60);
-        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->rateLimiter->attempt('test-remaining', 10, 1.0, 60);
+        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 1.0, 60));
     }
 
     public function testResetAttempts(): void
     {
-        $this->rateLimiter->attempt('test-reset', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset'));
+        $this->rateLimiter->attempt('test-reset', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset', 60));
         
         $this->rateLimiter->resetAttempts('test-reset');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset', 60));
     }
 
     public function testClearAttempts(): void
     {
-        $this->rateLimiter->attempt('test-clear', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear'));
+        $this->rateLimiter->attempt('test-clear', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear', 60));
         
         $this->rateLimiter->clear('test-clear');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear', 60));
     }
 
     public function testLimiterRegistration(): void
@@ -126,17 +126,17 @@ class TokenBucketRateLimiterTest extends TestCase
     public function testAvailableIn(): void
     {
         // Start with full bucket, should be available immediately
-        $this->assertEquals(0, $this->rateLimiter->availableIn('test-available', 10, 60));
+        $this->assertEquals(0, $this->rateLimiter->availableIn('test-available', 10, 1.0, 60));
         
         // Use up all tokens
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-available', 10, 60);
+            $this->rateLimiter->attempt('test-available', 10, 1.0, 60);
         }
         
         // Should now have a wait time
-        $availableIn = $this->rateLimiter->availableIn('test-available', 10, 60);
+        $availableIn = $this->rateLimiter->availableIn('test-available', 10, 1.0, 60);
         $this->assertGreaterThan(0, $availableIn);
-        $this->assertLessThanOrEqual(6, $availableIn); // Should be close to 60s/10tokens = 6s per token
+        $this->assertLessThanOrEqual(1, $availableIn); // Should be close to 1 second per token
     }
 
     public function testFactoryCreation(): void
@@ -146,7 +146,7 @@ class TokenBucketRateLimiterTest extends TestCase
         
         $this->assertInstanceOf(RateLimiter::class, $tokenBucketLimiter);
         
-        $result = $tokenBucketLimiter->attempt('factory-test', 5, 30);
+        $result = $tokenBucketLimiter->attempt('factory-test', 5, 1.0, 30);
         $this->assertTrue($result->successful());
         $this->assertEquals(4, $result->retriesLeft);
     }

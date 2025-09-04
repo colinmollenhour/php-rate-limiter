@@ -30,7 +30,9 @@ class SlidingWindowRateLimiterTest extends TestCase
 
     public function testSuccessfulAttempt(): void
     {
-        $result = $this->rateLimiter->attempt('test-key', 10, 60);
+        // Old: attempt('test-key', 10, 60) - 10 attempts over 60 seconds
+        // New: attempt('test-key', burstCapacity, sustainedRate, window) - for sliding window, burst is ignored
+        $result = $this->rateLimiter->attempt('test-key', 10, 10.0/60, 60);
         
         $this->assertInstanceOf(RateLimiterResult::class, $result);
         $this->assertTrue($result->successful());
@@ -41,13 +43,13 @@ class SlidingWindowRateLimiterTest extends TestCase
 
     public function testTooManyAttempts(): void
     {
-        // Make 10 attempts (the limit)
+        // Make 10 attempts (the limit) - Convert old API to new API
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-key-limit', 10, 60);
+            $this->rateLimiter->attempt('test-key-limit', 10, 10.0/60, 60);
         }
 
         // The 11th attempt should fail
-        $result = $this->rateLimiter->attempt('test-key-limit', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key-limit', 10, 10.0/60, 60);
         
         $this->assertFalse($result->successful());
         $this->assertGreaterThan(0, $result->retryAfter);
@@ -57,39 +59,39 @@ class SlidingWindowRateLimiterTest extends TestCase
 
     public function testAttemptCount(): void
     {
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 10.0/60, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 10.0/60, 60);
+        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts', 60));
     }
 
     public function testRemainingAttempts(): void
     {
-        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 10.0/60, 60));
         
-        $this->rateLimiter->attempt('test-remaining', 10, 60);
-        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->rateLimiter->attempt('test-remaining', 10, 10.0/60, 60);
+        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 10.0/60, 60));
     }
 
     public function testResetAttempts(): void
     {
-        $this->rateLimiter->attempt('test-reset', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset'));
+        $this->rateLimiter->attempt('test-reset', 10, 10.0/60, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset', 60));
         
         $this->rateLimiter->resetAttempts('test-reset');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset', 60));
     }
 
     public function testClearAttempts(): void
     {
-        $this->rateLimiter->attempt('test-clear', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear'));
+        $this->rateLimiter->attempt('test-clear', 10, 10.0/60, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear', 60));
         
         $this->rateLimiter->clear('test-clear');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear', 60));
     }
 
     public function testLimiterRegistration(): void

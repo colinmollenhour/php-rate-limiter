@@ -30,7 +30,7 @@ class FixedWindowRateLimiterTest extends TestCase
 
     public function testSuccessfulAttempt(): void
     {
-        $result = $this->rateLimiter->attempt('test-key', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key', 10, 1.0, 60);
         
         $this->assertInstanceOf(RateLimiterResult::class, $result);
         $this->assertTrue($result->successful());
@@ -43,11 +43,11 @@ class FixedWindowRateLimiterTest extends TestCase
     {
         // Make 10 attempts (the limit)
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt('test-key-limit', 10, 60);
+            $this->rateLimiter->attempt('test-key-limit', 10, 1.0, 60);
         }
 
         // The 11th attempt should fail
-        $result = $this->rateLimiter->attempt('test-key-limit', 10, 60);
+        $result = $this->rateLimiter->attempt('test-key-limit', 10, 1.0, 60);
         
         $this->assertFalse($result->successful());
         $this->assertGreaterThan(0, $result->retryAfter);
@@ -57,39 +57,39 @@ class FixedWindowRateLimiterTest extends TestCase
 
     public function testAttemptCount(): void
     {
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-attempts', 60));
         
-        $this->rateLimiter->attempt('test-attempts', 10, 60);
-        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts'));
+        $this->rateLimiter->attempt('test-attempts', 10, 1.0, 60);
+        $this->assertEquals(2, $this->rateLimiter->attempts('test-attempts', 60));
     }
 
     public function testRemainingAttempts(): void
     {
-        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->assertEquals(10, $this->rateLimiter->remaining('test-remaining', 10, 1.0, 60));
         
-        $this->rateLimiter->attempt('test-remaining', 10, 60);
-        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 60));
+        $this->rateLimiter->attempt('test-remaining', 10, 1.0, 60);
+        $this->assertEquals(9, $this->rateLimiter->remaining('test-remaining', 10, 1.0, 60));
     }
 
     public function testResetAttempts(): void
     {
-        $this->rateLimiter->attempt('test-reset', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset'));
+        $this->rateLimiter->attempt('test-reset', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-reset', 60));
         
         $this->rateLimiter->resetAttempts('test-reset');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-reset', 60));
     }
 
     public function testClearAttempts(): void
     {
-        $this->rateLimiter->attempt('test-clear', 10, 60);
-        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear'));
+        $this->rateLimiter->attempt('test-clear', 10, 1.0, 60);
+        $this->assertEquals(1, $this->rateLimiter->attempts('test-clear', 60));
         
         $this->rateLimiter->clear('test-clear');
-        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear'));
+        $this->assertEquals(0, $this->rateLimiter->attempts('test-clear', 60));
     }
 
     public function testLimiterRegistration(): void
@@ -110,8 +110,8 @@ class FixedWindowRateLimiterTest extends TestCase
         $windowSize = 2;
         
         // Make some requests
-        $this->rateLimiter->attempt('test-window', 5, $windowSize);
-        $this->rateLimiter->attempt('test-window', 5, $windowSize);
+        $this->rateLimiter->attempt('test-window', 5, 1.0, $windowSize);
+        $this->rateLimiter->attempt('test-window', 5, 1.0, $windowSize);
         $this->assertEquals(2, $this->rateLimiter->attempts('test-window', $windowSize));
         
         // Wait for the next window (this is a simplified test)
@@ -123,8 +123,8 @@ class FixedWindowRateLimiterTest extends TestCase
     public function testFixedWindowKeyIsolation(): void
     {
         // Test that different keys have independent counters
-        $this->rateLimiter->attempt('key1', 5, 60);
-        $this->rateLimiter->attempt('key2', 5, 60);
+        $this->rateLimiter->attempt('key1', 5, 1.0, 60);
+        $this->rateLimiter->attempt('key2', 5, 1.0, 60);
         
         $this->assertEquals(1, $this->rateLimiter->attempts('key1', 60));
         $this->assertEquals(1, $this->rateLimiter->attempts('key2', 60));
@@ -137,11 +137,11 @@ class FixedWindowRateLimiterTest extends TestCase
         $key = 'test-scan-reset';
         
         // Create multiple window keys by making requests across time
-        $this->rateLimiter->attempt($key, 5, 2); // Window 1
+        $this->rateLimiter->attempt($key, 5, 1.0, 2); // Window 1
         sleep(3); // Force new window
-        $this->rateLimiter->attempt($key, 5, 2); // Window 2  
+        $this->rateLimiter->attempt($key, 5, 1.0, 2); // Window 2  
         sleep(3); // Force another window
-        $this->rateLimiter->attempt($key, 5, 2); // Window 3
+        $this->rateLimiter->attempt($key, 5, 1.0, 2); // Window 3
         
         // Verify multiple windows were created by checking Redis directly
         $windowKeys = $this->redis->keys("fixed_rate_limiter:{$key}:*");
@@ -165,11 +165,11 @@ class FixedWindowRateLimiterTest extends TestCase
         $key = 'test-delete-count';
         
         // Make requests to create window keys
-        $this->rateLimiter->attempt($key, 3, 1); // Short window to create multiple keys
+        $this->rateLimiter->attempt($key, 3, 1.0, 1); // Short window to create multiple keys
         usleep(100000); // 100ms
-        $this->rateLimiter->attempt($key, 3, 1);
+        $this->rateLimiter->attempt($key, 3, 1.0, 1);
         usleep(100000);
-        $this->rateLimiter->attempt($key, 3, 1);
+        $this->rateLimiter->attempt($key, 3, 1.0, 1);
         
         // Count existing keys before reset
         $keysBefore = $this->redis->keys("fixed_rate_limiter:{$key}:*");
@@ -208,8 +208,8 @@ class FixedWindowRateLimiterTest extends TestCase
         $key2 = 'isolated-key-2';
         
         // Create windows for both keys
-        $this->rateLimiter->attempt($key1, 5, 60);
-        $this->rateLimiter->attempt($key2, 5, 60);
+        $this->rateLimiter->attempt($key1, 5, 1.0, 60);
+        $this->rateLimiter->attempt($key2, 5, 1.0, 60);
         
         // Verify both keys have attempts
         $this->assertEquals(1, $this->rateLimiter->attempts($key1, 60));
@@ -232,7 +232,7 @@ class FixedWindowRateLimiterTest extends TestCase
         
         // Create multiple windows quickly
         for ($i = 0; $i < 10; $i++) {
-            $this->rateLimiter->attempt($key, 100, 1); // 1-second windows
+            $this->rateLimiter->attempt($key, 100, 1.0, 1); // 1-second windows
             usleep(50000); // 50ms to create different timestamps
         }
         
