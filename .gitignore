@@ -1,0 +1,6 @@
+.phpunit*
+*.md
+!README.md
+composer.lock
+vendor
+

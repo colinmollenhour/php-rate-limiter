@@ -1,0 +1,31 @@
+{
+    "name": "cm/rate-limiter",
+    "description": "A flexible rate limiter library for PHP with multiple algorithms",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.0",
+        "colinmollenhour/credis": "^1.13"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "Cm\\RateLimiter\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Cm\\RateLimiter\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
