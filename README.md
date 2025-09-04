@@ -4,18 +4,22 @@ A flexible PHP library implementing 5 different rate limiting algorithms using R
 
 > **Note:** This is a standalone fork of [bvtterfly/sliding-window-rate-limiter](https://github.com/bvtterfly/sliding-window-rate-limiter), refactored to remove Laravel dependencies and support multiple algorithms.
 
+## Features
+
+- **5 Rate Limiting Algorithms** - Sliding Window, Fixed Window, Leaky Bucket, GCRA, Token Bucket
+- **Enhanced API** - Separate burst capacity and sustained rate parameters for fine-grained control
+- **Automatic Key Expiration** - Redis keys automatically expire to prevent memory leaks with random keys
+- **High Performance** - GCRA algorithm achieves ~25,900 RPS with sub-millisecond latency
+- **Redis Compatible** - Works with Redis, Dragonfly, KeyDB, Valkey, AWS ElastiCache
+- **Comprehensive Testing** - Multi-process stress testing with detailed performance metrics
+- **Laravel-Free** - Standalone library with minimal dependencies (PHP 8.0+, [Credis](https://github.com/colinmollenhour/credis))
+- **Atomic Operations** - All algorithms use Lua scripts for consistency and thread safety
+
 ## Installation
 
 ```bash
 composer require cm/rate-limiter
 ```
-
-##  Dependencies
-
-- PHP ^8.0
-- `redis` extension is optional but recommended
-- `colinmollenhour/credis` is automatically installed by composer
-- A Redis or Redis-compatible server (Redis, Dragonfly, KeyDB, Valkey, AWS ElastiCache)
 
 ## Quick Start
 
