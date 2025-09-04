@@ -10,11 +10,12 @@ A flexible PHP library implementing multiple rate limiting algorithms using Redi
 composer require cm/rate-limiter
 ```
 
-## Requirements
+##  Dependencies
 
 - PHP ^8.0
-- Redis server  
-- `colinmollenhour/credis` (automatically installed)
+- `redis` extension is optional but recommended
+- `colinmollenhour/credis` is automatically installed by composer
+- A Redis or Redis-compatible server
 
 ## Quick Start
 
