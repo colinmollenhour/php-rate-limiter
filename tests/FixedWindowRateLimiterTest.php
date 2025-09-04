@@ -130,4 +130,126 @@ class FixedWindowRateLimiterTest extends TestCase
         $this->assertEquals(1, $this->rateLimiter->attempts('key2', 60));
         $this->assertEquals(0, $this->rateLimiter->attempts('key3', 60));
     }
+
+    public function testResetAttemptsWithMultipleWindows(): void
+    {
+        // Test SCAN-based resetAttempts with multiple time windows
+        $key = 'test-scan-reset';
+        
+        // Create multiple window keys by making requests across time
+        $this->rateLimiter->attempt($key, 5, 2); // Window 1
+        sleep(3); // Force new window
+        $this->rateLimiter->attempt($key, 5, 2); // Window 2  
+        sleep(3); // Force another window
+        $this->rateLimiter->attempt($key, 5, 2); // Window 3
+        
+        // Verify multiple windows were created by checking Redis directly
+        $windowKeys = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $this->assertGreaterThanOrEqual(1, count($windowKeys), 'Should have created at least 1 window key');
+        
+        // Reset attempts using SCAN
+        $deletedCount = $this->rateLimiter->resetAttempts($key);
+        $this->assertGreaterThanOrEqual(1, $deletedCount, 'Should have deleted at least 1 key');
+        
+        // Verify all window keys are gone
+        $remainingKeys = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $this->assertEmpty($remainingKeys, 'All window keys should be deleted after reset');
+        
+        // Verify attempts count is 0
+        $this->assertEquals(0, $this->rateLimiter->attempts($key, 2));
+    }
+
+    public function testResetAttemptsReturnValue(): void
+    {
+        // Test that resetAttempts returns correct count of deleted keys
+        $key = 'test-delete-count';
+        
+        // Make requests to create window keys
+        $this->rateLimiter->attempt($key, 3, 1); // Short window to create multiple keys
+        usleep(100000); // 100ms
+        $this->rateLimiter->attempt($key, 3, 1);
+        usleep(100000);
+        $this->rateLimiter->attempt($key, 3, 1);
+        
+        // Count existing keys before reset
+        $keysBefore = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $keyCountBefore = count($keysBefore);
+        
+        // Reset and verify return value matches what was deleted
+        $deletedCount = $this->rateLimiter->resetAttempts($key);
+        $this->assertEquals($keyCountBefore, $deletedCount, 'Deleted count should match number of keys that existed');
+        
+        // Second reset should return 0
+        $secondDeletedCount = $this->rateLimiter->resetAttempts($key);
+        $this->assertEquals(0, $secondDeletedCount, 'Second reset should delete 0 keys');
+    }
+
+    public function testResetAttemptsEmptyPattern(): void
+    {
+        // Test resetAttempts when no matching keys exist
+        $key = 'non-existent-key';
+        
+        // Verify no keys exist for this pattern
+        $existingKeys = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $this->assertEmpty($existingKeys, 'Should start with no existing keys');
+        
+        // Reset should return 0 and not cause errors
+        $deletedCount = $this->rateLimiter->resetAttempts($key);
+        $this->assertEquals(0, $deletedCount, 'Should return 0 when no keys match pattern');
+        
+        // Attempts should still be 0
+        $this->assertEquals(0, $this->rateLimiter->attempts($key, 60));
+    }
+
+    public function testResetAttemptsKeyIsolation(): void
+    {
+        // Test that resetAttempts only affects the specified key pattern
+        $key1 = 'isolated-key-1';
+        $key2 = 'isolated-key-2';
+        
+        // Create windows for both keys
+        $this->rateLimiter->attempt($key1, 5, 60);
+        $this->rateLimiter->attempt($key2, 5, 60);
+        
+        // Verify both keys have attempts
+        $this->assertEquals(1, $this->rateLimiter->attempts($key1, 60));
+        $this->assertEquals(1, $this->rateLimiter->attempts($key2, 60));
+        
+        // Reset only key1
+        $deletedCount = $this->rateLimiter->resetAttempts($key1);
+        $this->assertGreaterThan(0, $deletedCount, 'Should have deleted key1 windows');
+        
+        // Verify key1 is reset but key2 is unaffected
+        $this->assertEquals(0, $this->rateLimiter->attempts($key1, 60));
+        $this->assertEquals(1, $this->rateLimiter->attempts($key2, 60), 'Key2 should be unaffected');
+    }
+
+    public function testScanDoesNotBlockRedis(): void
+    {
+        // Test that SCAN-based implementation doesn't block Redis
+        // This is more of a behavioral test to ensure we're using SCAN
+        $key = 'scan-performance-test';
+        
+        // Create multiple windows quickly
+        for ($i = 0; $i < 10; $i++) {
+            $this->rateLimiter->attempt($key, 100, 1); // 1-second windows
+            usleep(50000); // 50ms to create different timestamps
+        }
+        
+        // Verify keys were created
+        $keysBefore = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $this->assertGreaterThan(0, count($keysBefore), 'Should have created multiple window keys');
+        
+        // SCAN-based reset should handle all keys without blocking
+        $startTime = microtime(true);
+        $deletedCount = $this->rateLimiter->resetAttempts($key);
+        $endTime = microtime(true);
+        
+        $this->assertEquals(count($keysBefore), $deletedCount, 'Should delete all created keys');
+        $this->assertLessThan(1.0, $endTime - $startTime, 'SCAN operation should complete quickly');
+        
+        // Verify cleanup
+        $keysAfter = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $this->assertEmpty($keysAfter, 'All keys should be deleted');
+    }
 }

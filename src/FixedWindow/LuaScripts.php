@@ -81,13 +81,21 @@ LUA;
     {
         return <<<'LUA'
             local key_pattern = KEYS[1] .. ':*'
-            local keys_to_delete = redis.call('KEYS', key_pattern)
+            local keys_to_delete = {}
+            local cursor = '0'
+            local deleted_count = 0
             
-            if #keys_to_delete > 0 then
-                return redis.call('DEL', unpack(keys_to_delete))
-            end
+            repeat
+                local result = redis.call('SCAN', cursor, 'MATCH', key_pattern, 'COUNT', 100)
+                cursor = result[1]
+                local found_keys = result[2]
+                
+                if #found_keys > 0 then
+                    deleted_count = deleted_count + redis.call('DEL', unpack(found_keys))
+                end
+            until cursor == '0'
             
-            return 0
+            return deleted_count
 LUA;
     }
 }
