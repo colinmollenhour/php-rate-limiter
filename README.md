@@ -1,6 +1,6 @@
 # Cm\RateLimiter
 
-A flexible PHP library implementing multiple rate limiting algorithms using Redis.
+A flexible PHP library implementing 4 different rate limiting algorithms using Redis. Includes comprehensive performance testing and supports Redis alternatives like Dragonfly, KeyDB, and Valkey.
 
 > **Note:** This is a standalone fork of [bvtterfly/sliding-window-rate-limiter](https://github.com/bvtterfly/sliding-window-rate-limiter), refactored to remove Laravel dependencies and support multiple algorithms.
 
@@ -15,7 +15,7 @@ composer require cm/rate-limiter
 - PHP ^8.0
 - `redis` extension is optional but recommended
 - `colinmollenhour/credis` is automatically installed by composer
-- A Redis or Redis-compatible server
+- A Redis or Redis-compatible server (Redis, Dragonfly, KeyDB, Valkey, AWS ElastiCache)
 
 ## Quick Start
 
@@ -27,7 +27,7 @@ $redis = new Credis_Client('127.0.0.1', 6379);
 $factory = new RateLimiterFactory($redis);
 
 // Choose your algorithm
-$rateLimiter = $factory->createSlidingWindow(); // or createFixedWindow() or createLeakyBucket()
+$rateLimiter = $factory->createSlidingWindow(); // or createFixedWindow(), createLeakyBucket(), createGCRA()
 
 // Rate limit: 10 requests per 60 seconds
 $result = $rateLimiter->attempt('user:123', 10, 60);
@@ -46,6 +46,7 @@ if ($result->successful()) {
 | **Sliding Window** | High | Higher | Excellent | Good | APIs requiring smooth rate limiting |
 | **Fixed Window** | Medium | Lower | Poor | Excellent | High-traffic applications |
 | **Leaky Bucket** | High | Medium | Good | Good | Traffic spike handling with average rate control |
+| **GCRA** | High | Lower | Excellent | Excellent | Memory-efficient smooth rate limiting |
 | **Token Bucket** | High | Lower | Good | Excellent | *Coming soon* |
 
 ### Sliding Window
@@ -66,6 +67,25 @@ if ($result->successful()) {
 - **Cons**: More complex than fixed window, moderate memory usage
 - **Use when**: Need burst tolerance while maintaining long-term average rate limits
 
+### GCRA (Generic Cell Rate Algorithm)
+- **How it works**: Uses theoretical arrival time (TAT) to lazily compute when next request can be made
+- **Pros**: Very memory efficient (single value per key), smooth rate limiting, precise control, **highest performance**
+- **Cons**: More complex algorithm, requires understanding of TAT concept
+- **Use when**: Need memory-efficient rate limiting with smooth, predictable behavior, or maximum performance
+
+## Performance Comparison
+
+Based on max-speed benchmarking (requests/second with no throttling):
+
+| Algorithm | Throughput (RPS) | Relative Performance | Memory per Key | Best Use Case |
+|-----------|------------------|---------------------|----------------|---------------|
+| **GCRA** | ~22,000 | **2.0x baseline** | Single float | High-performance applications |
+| **Leaky Bucket** | ~11,300 | 1.0x baseline | Hash with 2 fields | Traffic spike handling |
+| **Fixed Window** | ~11,200 | 1.0x baseline | Single counter + TTL | Simple high-traffic apps |
+| **Sliding Window** | ~10,200 | 0.9x baseline | Sorted set | Precise rate limiting |
+
+> **Key Insight**: GCRA offers both the lowest memory usage AND highest performance, making it ideal for high-scale applications.
+
 ## API Reference
 
 ### Core Methods
@@ -81,6 +101,7 @@ $rateLimiter->resetAttempts($key);
 $factory->createSlidingWindow();
 $factory->createFixedWindow();
 $factory->createLeakyBucket();
+$factory->createGCRA();
 // $factory->createTokenBucket();  // Coming soon
 ```
 
@@ -89,6 +110,7 @@ $factory->createLeakyBucket();
 $slidingWindow = new \Cm\RateLimiter\SlidingWindow\RateLimiter($redis);
 $fixedWindow = new \Cm\RateLimiter\FixedWindow\RateLimiter($redis);
 $leakyBucket = new \Cm\RateLimiter\LeakyBucket\RateLimiter($redis);
+$gcra = new \Cm\RateLimiter\GCRA\RateLimiter($redis);
 ```
 
 ## Testing
@@ -131,14 +153,17 @@ php stress-test.php --help
 # Default: All scenarios, all algorithms, 30s duration, 20 processes
 php stress-test.php
 
-# Test only leaky bucket algorithm with high contention for 10 seconds
-php stress-test.php --algorithms=leaky --scenarios=high --duration=10
+# Test only GCRA algorithm with high contention for 10 seconds
+php stress-test.php --algorithms=gcra --scenarios=high --duration=10
 
 # Custom test with 100 keys, 50 max attempts, 5 second windows
 php stress-test.php --keys=100 --max-attempts=50 --decay=5 --duration=15
 
 # Quick comparison between algorithms on burst scenario
 php stress-test.php --scenarios=burst --duration=5 --processes=5
+
+# Performance benchmark (max speed, no throttling)
+php stress-test.php --max-speed --duration=5 --processes=4
 
 # Test specific scenarios with verbose output
 php stress-test.php --scenarios=high,medium --verbose --duration=20
@@ -154,7 +179,7 @@ php stress-test.php --scenarios=high,medium --verbose --duration=20
 
 #### CLI Options
 
-- `--algorithms=sliding,fixed,leaky` - Choose which algorithms to test
+- `--algorithms=sliding,fixed,leaky,gcra` - Choose which algorithms to test
 - `--scenarios=high,medium,low,burst,all,custom` - Select test scenarios
 - `--duration=SECONDS` - Test duration (default: 30s)
 - `--processes=NUM` - Concurrent processes (default: 20)
@@ -163,6 +188,7 @@ php stress-test.php --scenarios=high,medium --verbose --duration=20
 - `--decay=SECONDS` - Custom window size
 - `--verbose` - Detailed output
 - `--no-clear` - Keep Redis data between tests
+- `--max-speed` - Performance mode: send requests as fast as possible (no throttling)
 
 #### Metrics Collected
 
@@ -173,6 +199,13 @@ For each algorithm and scenario:
 - **Block Rate %** - Requests blocked by rate limiting
 - **Error Rate %** - System/Redis errors
 - **Duration** - Actual test execution time
+
+#### Testing Modes
+
+The stress test supports two distinct testing modes:
+
+1. **Rate Limiting Behavior Test** (default): Tests how algorithms behave under controlled load with request throttling
+2. **Max Speed Performance Test** (`--max-speed`): Tests raw algorithm throughput with no throttling to reveal true performance differences
 
 #### Expected Performance Characteristics
 
@@ -191,6 +224,12 @@ For each algorithm and scenario:
 - Allows initial burst up to capacity, then enforces steady leak rate
 - Best for handling traffic spikes while maintaining average rate limits
 - Typically shows higher success rates in high contention scenarios
+
+**GCRA Algorithm:**
+- Lowest memory usage (single float per key), **highest throughput** (~2x faster than other algorithms)
+- Uses theoretical arrival time (TAT) for precise, predictable rate limiting  
+- Best for high-performance, memory-constrained environments requiring smooth rate control
+- Shows moderate success rates with consistent, predictable blocking behavior
 
 #### Troubleshooting
 

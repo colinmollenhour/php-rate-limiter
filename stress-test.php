@@ -14,7 +14,7 @@ class StressTestRunner
     public function __construct(array $options = [])
     {
         $this->options = array_merge([
-            'algorithms' => ['sliding', 'fixed', 'leaky'],
+            'algorithms' => ['sliding', 'fixed', 'leaky', 'gcra'],
             'scenarios' => ['all'],
             'duration' => 30,
             'processes' => 20,
@@ -25,7 +25,8 @@ class StressTestRunner
             'custom_max_attempts' => null,
             'custom_decay' => null,
             'verbose' => false,
-            'no_clear' => false
+            'no_clear' => false,
+            'max_speed' => false
         ], $options);
         
         $this->redis = new Credis_Client($this->options['redis_host'], $this->options['redis_port']);
@@ -39,12 +40,20 @@ class StressTestRunner
     
     public function run(): void
     {
-        echo "=== Rate Limiter Stress Test ===\n";
+        $testType = $this->options['max_speed'] ? "Max Speed Performance Test" : "Rate Limiter Stress Test";
+        echo "=== {$testType} ===\n";
         echo "Testing algorithms: " . implode(', ', $this->options['algorithms']) . "\n";
         echo "PHP Version: " . PHP_VERSION . "\n";
         echo "Processes: " . $this->options['processes'] . "\n";
         echo "Duration: " . $this->options['duration'] . "s per test\n";
-        echo "Redis: {$this->options['redis_host']}:{$this->options['redis_port']}\n\n";
+        echo "Redis: {$this->options['redis_host']}:{$this->options['redis_port']}\n";
+        echo "Server: " . $this->getRedisServerInfo() . "\n";
+        if ($this->options['max_speed']) {
+            echo "Mode: Maximum speed (no throttling) - measuring raw algorithm performance\n";
+        } else {
+            echo "Mode: Throttled load testing - measuring rate limiting behavior\n";
+        }
+        echo "\n";
         
         $testConfigs = $this->getTestConfigurations();
         
@@ -93,6 +102,32 @@ class StressTestRunner
                 'decay' => $this->options['custom_decay'] ?? 10,
                 'target_rps' => $this->options['target_rps'] ?? 500
             ]];
+        }
+        
+        // Performance test configurations for max speed mode
+        if ($this->options['max_speed']) {
+            return [
+                [
+                    'name' => 'Performance: Very Permissive (10000 req/10s)',
+                    'key' => 'perf_permissive',
+                    'keys' => 1,
+                    'processes' => $this->options['processes'],
+                    'duration' => $this->options['duration'],
+                    'max_attempts' => 10000,
+                    'decay' => 10,
+                    'target_rps' => 999999 // Ignored in max speed mode
+                ],
+                [
+                    'name' => 'Performance: Very Restrictive (1 req/10s)',
+                    'key' => 'perf_restrictive',
+                    'keys' => 1,
+                    'processes' => $this->options['processes'],
+                    'duration' => $this->options['duration'],
+                    'max_attempts' => 1,
+                    'decay' => 10,
+                    'target_rps' => 999999 // Ignored in max speed mode
+                ]
+            ];
         }
         
         return [
@@ -222,6 +257,7 @@ class StressTestRunner
             'sliding' => $factory->createSlidingWindow(),
             'fixed' => $factory->createFixedWindow(),
             'leaky' => $factory->createLeakyBucket(),
+            'gcra' => $factory->createGCRA(),
             default => throw new InvalidArgumentException("Unknown algorithm: {$algorithm}")
         };
         
@@ -233,7 +269,12 @@ class StressTestRunner
         ];
         
         $endTime = time() + $config['duration'];
-        $requestDelay = $config['processes'] > 0 ? (1000000 / $config['target_rps']) * $config['processes'] : 1000;
+        
+        // Calculate request delay - skip in max speed mode
+        $requestDelay = 0;
+        if (!$this->options['max_speed']) {
+            $requestDelay = $config['processes'] > 0 ? (1000000 / $config['target_rps']) * $config['processes'] : 1000;
+        }
         
         while (time() < $endTime) {
             // Select random key from available set
@@ -354,6 +395,81 @@ class StressTestRunner
         }
     }
     
+    private function getRedisServerInfo(): string
+    {
+        try {
+            $info = $this->redis->info();
+            
+            if (!$info) {
+                return 'Unknown (INFO command failed)';
+            }
+            
+            // Parse INFO response - it can be a string or array depending on Redis client
+            if (is_string($info)) {
+                $lines = explode("\n", $info);
+                $infoData = [];
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (empty($line) || $line[0] === '#') {
+                        continue;
+                    }
+                    if (strpos($line, ':') !== false) {
+                        [$key, $value] = explode(':', $line, 2);
+                        $infoData[trim($key)] = trim($value);
+                    }
+                }
+            } else {
+                $infoData = $info;
+            }
+            
+            // Check for various Redis variants
+            if (isset($infoData['dragonfly_version'])) {
+                return "Dragonfly {$infoData['dragonfly_version']}";
+            }
+            
+            if (isset($infoData['keydb_version'])) {
+                return "KeyDB {$infoData['keydb_version']}";
+            }
+            
+            if (isset($infoData['valkey_version'])) {
+                return "Valkey {$infoData['valkey_version']}";
+            }
+            
+            // Check for AWS ElastiCache Redis
+            if (isset($infoData['redis_version']) && isset($infoData['os']) && 
+                strpos($infoData['os'], 'Amazon ElastiCache') !== false) {
+                return "AWS ElastiCache Redis {$infoData['redis_version']}";
+            }
+            
+            if (isset($infoData['redis_version'])) {
+                $version = $infoData['redis_version'];
+                $mode = '';
+                
+                // Check if it's Redis Cluster, Sentinel, etc.
+                if (isset($infoData['redis_mode'])) {
+                    $mode = " ({$infoData['redis_mode']} mode)";
+                } elseif (isset($infoData['cluster_enabled']) && $infoData['cluster_enabled'] === '1') {
+                    $mode = ' (cluster mode)';
+                } else {
+                    $mode = ' (standalone mode)';
+                }
+                
+                return "Redis {$version}{$mode}";
+            }
+            
+            // Fallback for unknown Redis-compatible servers
+            if (isset($infoData['server_version']) || isset($infoData['version'])) {
+                $version = $infoData['server_version'] ?? $infoData['version'];
+                return "Redis-compatible {$version}";
+            }
+            
+            return 'Redis-compatible server (version unknown)';
+            
+        } catch (Exception $e) {
+            return 'Unknown (connection error: ' . $e->getMessage() . ')';
+        }
+    }
+
     private function getMaxProcesses(): int
     {
         // Try to determine system limits
@@ -377,7 +493,7 @@ function showHelp(): void
     echo "Usage: php stress-test.php [OPTIONS]\n\n";
     echo "Options:\n";
     echo "  --help                 Show this help message\n";
-    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed,leaky or combinations (default: sliding,fixed,leaky)\n";
+    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed,leaky,gcra or combinations (default: sliding,fixed,leaky,gcra)\n";
     echo "  --scenarios=SCENARIO   Test scenarios: high,medium,low,burst,all or custom (default: all)\n";
     echo "  --duration=SECONDS     Duration of each test in seconds (default: 30)\n";
     echo "  --processes=NUM        Number of concurrent processes (default: 20)\n";
@@ -388,13 +504,15 @@ function showHelp(): void
     echo "  --max-attempts=NUM     Custom max attempts for custom scenario\n";
     echo "  --decay=SECONDS        Custom decay time for custom scenario\n";
     echo "  --verbose              Enable verbose output\n";
-    echo "  --no-clear             Don't clear Redis between tests\n\n";
+    echo "  --no-clear             Don't clear Redis between tests\n";
+    echo "  --max-speed            Performance mode: send requests as fast as possible (no throttling)\n\n";
     echo "Examples:\n";
     echo "  php stress-test.php --help\n";
-    echo "  php stress-test.php --algorithms=sliding,leaky --duration=10\n";
+    echo "  php stress-test.php --algorithms=sliding,gcra --duration=10\n";
     echo "  php stress-test.php --scenarios=high,medium --processes=10\n";
     echo "  php stress-test.php --keys=100 --max-attempts=50 --decay=30\n";
-    echo "  php stress-test.php --scenarios=burst --algorithms=fixed\n\n";
+    echo "  php stress-test.php --scenarios=burst --algorithms=fixed\n";
+    echo "  php stress-test.php --max-speed --duration=5 --processes=4\n\n";
     echo "Scenarios:\n";
     echo "  high    - High contention (5 keys, 100 req/key)\n";
     echo "  medium  - Medium contention (50 keys, 50 req/key)\n";
@@ -405,7 +523,8 @@ function showHelp(): void
     echo "Algorithms:\n";
     echo "  sliding - Sliding window algorithm (precise, higher memory)\n";
     echo "  fixed   - Fixed window algorithm (efficient, allows burst)\n";
-    echo "  leaky   - Leaky bucket algorithm (allows burst, enforces average rate)\n\n";
+    echo "  leaky   - Leaky bucket algorithm (allows burst, enforces average rate)\n";
+    echo "  gcra    - GCRA algorithm (memory efficient, smooth rate limiting)\n\n";
 }
 
 function parseArguments(): array
@@ -462,15 +581,17 @@ function parseArguments(): array
             $options['verbose'] = true;
         } elseif ($arg === '--no-clear') {
             $options['no_clear'] = true;
+        } elseif ($arg === '--max-speed') {
+            $options['max_speed'] = true;
         }
     }
     
     // Validate algorithms
     if (isset($options['algorithms'])) {
-        $validAlgorithms = ['sliding', 'fixed', 'leaky'];
+        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra'];
         $options['algorithms'] = array_intersect($options['algorithms'], $validAlgorithms);
         if (empty($options['algorithms'])) {
-            die("ERROR: Invalid algorithms. Valid options: sliding, fixed, leaky\n");
+            die("ERROR: Invalid algorithms. Valid options: sliding, fixed, leaky, gcra\n");
         }
     }
     

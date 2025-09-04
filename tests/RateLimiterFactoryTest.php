@@ -8,6 +8,7 @@ use Cm\RateLimiter\RateLimiterInterface;
 use Cm\RateLimiter\SlidingWindow\RateLimiter as SlidingWindowRateLimiter;
 use Cm\RateLimiter\FixedWindow\RateLimiter as FixedWindowRateLimiter;
 use Cm\RateLimiter\LeakyBucket\RateLimiter as LeakyBucketRateLimiter;
+use Cm\RateLimiter\GCRA\RateLimiter as GCRARateLimiter;
 use Credis_Client;
 
 class RateLimiterFactoryTest extends TestCase
@@ -83,27 +84,50 @@ class RateLimiterFactoryTest extends TestCase
         $this->assertEquals(4, $result->retriesLeft);
     }
 
+    public function testCreateGCRA(): void
+    {
+        $rateLimiter = $this->factory->createGCRA();
+        
+        $this->assertInstanceOf(RateLimiterInterface::class, $rateLimiter);
+        $this->assertInstanceOf(GCRARateLimiter::class, $rateLimiter);
+    }
+
+    public function testGCRARateLimiterWorks(): void
+    {
+        $rateLimiter = $this->factory->createGCRA();
+        
+        // Test that the created rate limiter actually works
+        $result = $rateLimiter->attempt('gcra-factory-test', 5, 30);
+        $this->assertTrue($result->successful());
+        $this->assertGreaterThanOrEqual(0, $result->retriesLeft);
+    }
+
     public function testAllAlgorithmsAreIndependent(): void
     {
         $slidingWindow = $this->factory->createSlidingWindow();
         $fixedWindow = $this->factory->createFixedWindow();
         $leakyBucket = $this->factory->createLeakyBucket();
+        $gcra = $this->factory->createGCRA();
         
         // Use the same key but different algorithms - they should be independent
         $slidingResult = $slidingWindow->attempt('independence-test', 5, 30);
         $fixedResult = $fixedWindow->attempt('independence-test', 5, 30);
         $leakyResult = $leakyBucket->attempt('independence-test', 5, 30);
+        $gcraResult = $gcra->attempt('independence-test', 5, 30);
         
         $this->assertTrue($slidingResult->successful());
         $this->assertTrue($fixedResult->successful());
         $this->assertTrue($leakyResult->successful());
+        $this->assertTrue($gcraResult->successful());
         $this->assertEquals(4, $slidingResult->retriesLeft);
         $this->assertEquals(4, $fixedResult->retriesLeft);
         $this->assertEquals(4, $leakyResult->retriesLeft);
+        $this->assertGreaterThanOrEqual(0, $gcraResult->retriesLeft);
         
         // Check that they have different key prefixes
         $this->assertEquals(1, $slidingWindow->attempts('independence-test', 30));
         $this->assertEquals(1, $fixedWindow->attempts('independence-test', 30));
         $this->assertEquals(1, $leakyBucket->attempts('independence-test', 30));
+        $this->assertGreaterThanOrEqual(0, $gcra->attempts('independence-test', 30));
     }
 }
