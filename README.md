@@ -77,14 +77,14 @@ if ($result->successful()) {
 
 Based on max-speed benchmarking (requests/second with no throttling):
 
-| Algorithm | Throughput (RPS) | Relative Performance | Memory per Key | Best Use Case |
-|-----------|------------------|---------------------|----------------|---------------|
-| **GCRA** | ~22,000 | **2.0x baseline** | Single float | High-performance applications |
-| **Leaky Bucket** | ~11,300 | 1.0x baseline | Hash with 2 fields | Traffic spike handling |
-| **Fixed Window** | ~11,200 | 1.0x baseline | Single counter + TTL | Simple high-traffic apps |
-| **Sliding Window** | ~10,200 | 0.9x baseline | Sorted set | Precise rate limiting |
+| Algorithm | Throughput (RPS) | Latency Avg (ms) | Latency P99 (ms) | Memory per Key | Best Use Case |
+|-----------|------------------|------------------|------------------|----------------|---------------|
+| **GCRA** | ~22,000 | 0.088 | 0.250 | Single float | High-performance applications |
+| **Leaky Bucket** | ~11,300 | 0.263 | 0.744 | Hash with 2 fields | Traffic spike handling |
+| **Fixed Window** | ~11,200 | 0.260 | 0.729 | Single counter + TTL | Simple high-traffic apps |
+| **Sliding Window** | ~10,200 | 0.308 | 0.847 | Sorted set | Precise rate limiting |
 
-> **Key Insight**: GCRA offers both the lowest memory usage AND highest performance, making it ideal for high-scale applications.
+> **Key Insight**: GCRA offers the lowest memory usage, highest performance, AND lowest latency (~3x faster than other algorithms), making it ideal for high-scale applications.
 
 ## API Reference
 
@@ -167,6 +167,12 @@ php stress-test.php --max-speed --duration=5 --processes=4
 
 # Test specific scenarios with verbose output
 php stress-test.php --scenarios=high,medium --verbose --duration=20
+
+# High-precision latency analysis
+php stress-test.php --latency-precision=5 --algorithms=gcra,sliding --scenarios=medium
+
+# Memory-efficient latency sampling for long tests
+php stress-test.php --latency-sample=100 --max-speed --duration=30 --processes=10
 ```
 
 #### Test Scenarios
@@ -189,6 +195,8 @@ php stress-test.php --scenarios=high,medium --verbose --duration=20
 - `--verbose` - Detailed output
 - `--no-clear` - Keep Redis data between tests
 - `--max-speed` - Performance mode: send requests as fast as possible (no throttling)
+- `--latency-precision=N` - Number of decimal places for latency rounding (default: 2)
+- `--latency-sample=N` - Sample rate for latency collection - collect every Nth measurement (default: 1 = all measurements)
 
 #### Metrics Collected
 
@@ -199,6 +207,31 @@ For each algorithm and scenario:
 - **Block Rate %** - Requests blocked by rate limiting
 - **Error Rate %** - System/Redis errors
 - **Duration** - Actual test execution time
+- **Latency Metrics** - Detailed latency analysis of each rate limit check:
+  - **Latency Avg (ms)** - Average latency per request
+  - **Latency P50 (ms)** - Median latency (50th percentile)
+  - **Latency P95 (ms)** - 95th percentile latency
+  - **Latency P99 (ms)** - 99th percentile latency
+  - **Latency Max (ms)** - Maximum observed latency
+
+#### Latency Measurement
+
+The stress test includes comprehensive latency measurement using high-precision `microtime()` to measure the added latency of each rate limit check:
+
+**Features:**
+- **Configurable Precision**: Use `--latency-precision=N` to set decimal places (0-10, default: 2)
+- **Sampling Control**: Use `--latency-sample=N` to collect every Nth measurement (default: 1 = all measurements)
+- **Memory Efficient**: Uses counter-based storage instead of storing individual measurements
+- **Detailed Statistics**: Provides avg, P50, P95, P99, and max latency metrics
+
+**Examples:**
+```bash
+# Maximum precision latency analysis
+php stress-test.php --latency-precision=5 --algorithms=gcra,sliding
+
+# Memory-efficient sampling for high-load tests
+php stress-test.php --latency-sample=100 --max-speed --processes=10
+```
 
 #### Testing Modes
 

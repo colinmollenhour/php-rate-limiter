@@ -109,31 +109,8 @@ class StressTestRunner
             ]];
         }
         
-        // Performance test configurations for max speed mode
-        if ($this->options['max_speed']) {
-            return [
-                [
-                    'name' => 'Performance: Very Permissive (10000 req/10s)',
-                    'key' => 'perf_permissive',
-                    'keys' => 1,
-                    'processes' => $this->options['processes'],
-                    'duration' => $this->options['duration'],
-                    'max_attempts' => 10000,
-                    'decay' => 10,
-                    'target_rps' => 999999 // Ignored in max speed mode
-                ],
-                [
-                    'name' => 'Performance: Very Restrictive (1 req/10s)',
-                    'key' => 'perf_restrictive',
-                    'keys' => 1,
-                    'processes' => $this->options['processes'],
-                    'duration' => $this->options['duration'],
-                    'max_attempts' => 1,
-                    'decay' => 10,
-                    'target_rps' => 999999 // Ignored in max speed mode
-                ]
-            ];
-        }
+        // In max-speed mode, use the same scenarios but with no throttling
+        // The throttling will be disabled in the worker process based on max_speed flag
         
         return [
             [
@@ -296,7 +273,7 @@ class StressTestRunner
             'latency_counters' => [] // Store latency counts by rounded value (5 decimal places)
         ];
         
-        $endTime = time() + $config['duration'];
+        $testEndTime = time() + $config['duration'];
         
         // Calculate request delay - skip in max speed mode
         $requestDelay = 0;
@@ -304,18 +281,18 @@ class StressTestRunner
             $requestDelay = $config['processes'] > 0 ? (1000000 / $config['target_rps']) * $config['processes'] : 1000;
         }
         
-        while (time() < $endTime) {
+        while (time() < $testEndTime) {
             // Select random key from available set
             $keyId = rand(1, $config['keys']);
             $key = "test_key_{$keyId}";
             
             try {
                 // Measure latency of the rate limit check
-                $startTime = microtime(true);
+                $latencyStartTime = microtime(true);
                 $result = $limiter->attempt($key, $config['max_attempts'], $config['decay']);
-                $endTime = microtime(true);
+                $latencyEndTime = microtime(true);
                 
-                $latency = ($endTime - $startTime) * 1000; // Convert to milliseconds
+                $latency = ($latencyEndTime - $latencyStartTime) * 1000; // Convert to milliseconds
                 
                 // Collect latency with configurable sampling
                 $shouldSample = ($stats['total_requests'] % $this->options['latency_sample'] === 0);
