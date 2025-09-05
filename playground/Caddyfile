@@ -1,0 +1,41 @@
+{
+    # Global options
+    auto_https off
+    admin off
+
+	frankenphp {
+		worker {
+			file  /app/public/worker.php
+			watch /app/public
+            watch /app/src
+		}
+	}
+}
+
+:8080 {
+    # Set document root
+    root * /app/public
+    
+    # Enable PHP processing with FrankenPHP
+    php_server
+    
+    # Route all requests to index.php
+    try_files {path} /index.php
+    
+    # Add CORS headers
+    header {
+        Access-Control-Allow-Origin *
+        Access-Control-Allow-Methods "GET, POST, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type"
+    }
+    
+    # Handle preflight requests
+    @options method OPTIONS
+    respond @options 200
+    
+    # Logging
+    log {
+        output stdout
+        format console
+    }
+}
