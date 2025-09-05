@@ -28,7 +28,7 @@ function computeScriptHashes($className, $methods) {
 }
 
 // LeakyBucket
-computeScriptHashes(LeakyBucketScripts::class, ['attempt', 'attempts', 'availableIn', 'resetAttempts']);
+computeScriptHashes(LeakyBucketScripts::class, ['attempt', 'attempts', 'availableIn']);
 
 // SlidingWindow
 computeScriptHashes(SlidingWindowScripts::class, ['attempt', 'attempts', 'availableIn']);
@@ -37,10 +37,10 @@ computeScriptHashes(SlidingWindowScripts::class, ['attempt', 'attempts', 'availa
 computeScriptHashes(FixedWindowScripts::class, ['attempt', 'attempts', 'availableIn', 'resetAttempts']);
 
 // GCRA
-computeScriptHashes(GCRAScripts::class, ['attempt', 'attempts', 'availableIn', 'resetAttempts']);
+computeScriptHashes(GCRAScripts::class, ['attempt', 'attempts', 'availableIn']);
 
 // TokenBucket
-computeScriptHashes(TokenBucketScripts::class, ['attempt', 'attempts', 'tokensRemaining', 'availableIn', 'resetAttempts']);
+computeScriptHashes(TokenBucketScripts::class, ['attempt', 'attempts', 'tokensRemaining', 'availableIn']);
 
 // ConcurrencyAware
-computeScriptHashes(ConcurrencyAwareScripts::class, ['checkConcurrency', 'releaseConcurrency', 'currentConcurrency', 'cleanupExpired']);
+computeScriptHashes(ConcurrencyAwareScripts::class, ['checkConcurrency', 'currentConcurrency', 'cleanupExpired']);

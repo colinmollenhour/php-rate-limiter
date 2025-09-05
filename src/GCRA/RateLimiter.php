@@ -60,10 +60,7 @@ class RateLimiter implements RateLimiterInterface
 
     public function resetAttempts(string $key): mixed
     {
-        $keys = [$this->getKeyWithPrefix($key)];
-        $args = [];
-
-        return $this->evalSha($this->redis, LuaScripts::resetAttempts(), LuaScripts::RESETATTEMPTS_SHA, $keys, $args);
+        return $this->redis->del($this->getKeyWithPrefix($key));
     }
 
     public function remaining(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): int

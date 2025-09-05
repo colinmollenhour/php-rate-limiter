@@ -119,10 +119,7 @@ class RateLimiter implements ConcurrencyAwareRateLimiterInterface
     public function releaseConcurrency(string $key, string $requestId): void
     {
         $concurrencyKey = $this->getConcurrencyKey($key);
-        $keys = [$concurrencyKey];
-        $args = [$requestId];
-        
-        $this->evalSha($this->redis, LuaScripts::releaseConcurrency(), LuaScripts::RELEASECONCURRENCY_SHA, $keys, $args);
+        $this->redis->zRem($concurrencyKey, $requestId);
     }
 
     public function currentConcurrency(string $key, int $timeoutSeconds = 30): int

@@ -6,7 +6,6 @@ class LuaScripts
 {
     // SHA1 hashes for Lua scripts
     public const CHECKCONCURRENCY_SHA = '314d03146ccb8e98152f5773c624fd6de43a1ac0';
-    public const RELEASECONCURRENCY_SHA = '92495fb991d9984d616ac1041bea7660f5e769c7';
     public const CURRENTCONCURRENCY_SHA = 'c772250dfe0ede49c159d69f8cedf1d4b82fa1bb';
     public const CLEANUPEXPIRED_SHA = '7fbb0b82bd81c67f537c16cf4e33d4ea2d969291';
 
@@ -36,16 +35,6 @@ class LuaScripts
             redis.call('EXPIRE', concurrency_key, timeout_seconds * 2)
             
             return {1, current_concurrent + 1}
-LUA;
-    }
-    
-    public static function releaseConcurrency(): string
-    {
-        return <<<'LUA'
-            local concurrency_key = KEYS[1]
-            local request_id = ARGV[1]
-            
-            return redis.call('ZREM', concurrency_key, request_id)
 LUA;
     }
     

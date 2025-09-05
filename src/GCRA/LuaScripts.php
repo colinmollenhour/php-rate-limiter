@@ -8,7 +8,6 @@ class LuaScripts
     public const ATTEMPT_SHA = '8046f28a23a874dff88548af0a352e9ea279eb0a';
     public const ATTEMPTS_SHA = 'bf2f202a3c0c373f200b9d718ecdb9717a080e8f';
     public const AVAILABLEIN_SHA = '3bb5f2188fa7e53f555315a411bc5a5e97bab50a';
-    public const RESETATTEMPTS_SHA = '85a2f7f040afae2f26b0bbfc9feea443b159b28e';
 
     public static function attempt(): string
     {
@@ -118,11 +117,4 @@ LUA;
 LUA;
     }
 
-    public static function resetAttempts(): string
-    {
-        return <<<'LUA'
-            local key = KEYS[1]
-            return redis.call('DEL', key)
-LUA;
-    }
 }
