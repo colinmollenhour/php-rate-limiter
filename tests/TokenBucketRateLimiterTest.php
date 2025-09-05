@@ -137,7 +137,7 @@ class TokenBucketRateLimiterTest extends TestCase
         // Should now have a wait time
         $availableIn = $this->rateLimiter->availableIn('test-available', 10, 1.0, 60);
         $this->assertGreaterThan(0, $availableIn);
-        $this->assertLessThanOrEqual(1, $availableIn); // Should be close to 1 second per token
+        $this->assertLessThanOrEqual(2, $availableIn); // With burst protection, may be up to 2 seconds
     }
 
     public function testFactoryCreation(): void
