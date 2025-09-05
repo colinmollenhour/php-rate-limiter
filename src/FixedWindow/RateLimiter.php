@@ -103,6 +103,6 @@ class RateLimiter implements RateLimiterInterface
 
     private function getKeyWithPrefix(string $key): string
     {
-        return "fixed_rate_limiter:{$key}";
+        return "cm-fixed:{$key}";
     }
 }

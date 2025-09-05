@@ -100,7 +100,7 @@ class RateLimiter implements RateLimiterInterface
 
     private function getKeyWithPrefix(string $key): string
     {
-        return "leaky_bucket_rate_limiter:{$key}";
+        return "cm-leaky:{$key}";
     }
 
     private function calculateLeakRate(float $sustainedRate): int

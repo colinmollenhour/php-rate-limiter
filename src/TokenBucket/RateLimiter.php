@@ -98,6 +98,6 @@ class RateLimiter implements RateLimiterInterface
 
     private function getKeyWithPrefix(string $key): string
     {
-        return "token_bucket_rate_limiter:{$key}";
+        return "cm-token:{$key}";
     }
 }

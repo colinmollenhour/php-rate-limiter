@@ -217,6 +217,6 @@ class RateLimiter implements ConcurrencyAwareRateLimiterInterface
 
     private function getConcurrencyKey(string $key): string
     {
-        return "concurrency:{$key}";
+        return "cm-conc:{$key}";
     }
 }

@@ -197,11 +197,11 @@ class GCRARateLimiterTest extends TestCase
         }
         
         // Check that only one Redis key exists for this rate limiter key
-        $redisKeys = $this->redis->keys("gcra_rate_limiter:{$key}*");
+        $redisKeys = $this->redis->keys("cm-gcra:{$key}*");
         $this->assertEquals(1, count($redisKeys), 'GCRA should only create one Redis key per rate limit key');
         
         // The value should be a float (TAT)
-        $tatValue = $this->redis->get("gcra_rate_limiter:{$key}");
+        $tatValue = $this->redis->get("cm-gcra:{$key}");
         $this->assertIsNumeric($tatValue, 'TAT value should be numeric');
     }
 }

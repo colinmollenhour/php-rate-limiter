@@ -145,7 +145,7 @@ class FixedWindowRateLimiterTest extends TestCase
         $this->rateLimiter->attempt($key, 5, 1.0, 2); // Window 3
         
         // Verify multiple windows were created by checking Redis directly
-        $windowKeys = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $windowKeys = $this->redis->keys("cm-fixed:{$key}:*");
         $this->assertGreaterThanOrEqual(1, count($windowKeys), 'Should have created at least 1 window key');
         
         // Reset attempts using SCAN
@@ -153,7 +153,7 @@ class FixedWindowRateLimiterTest extends TestCase
         $this->assertGreaterThanOrEqual(1, $deletedCount, 'Should have deleted at least 1 key');
         
         // Verify all window keys are gone
-        $remainingKeys = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $remainingKeys = $this->redis->keys("cm-fixed:{$key}:*");
         $this->assertEmpty($remainingKeys, 'All window keys should be deleted after reset');
         
         // Verify attempts count is 0
@@ -173,7 +173,7 @@ class FixedWindowRateLimiterTest extends TestCase
         $this->rateLimiter->attempt($key, 3, 1.0, 1);
         
         // Count existing keys before reset
-        $keysBefore = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $keysBefore = $this->redis->keys("cm-fixed:{$key}:*");
         $keyCountBefore = count($keysBefore);
         
         // Reset and verify return value matches what was deleted
@@ -191,7 +191,7 @@ class FixedWindowRateLimiterTest extends TestCase
         $key = 'non-existent-key';
         
         // Verify no keys exist for this pattern
-        $existingKeys = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $existingKeys = $this->redis->keys("cm-fixed:{$key}:*");
         $this->assertEmpty($existingKeys, 'Should start with no existing keys');
         
         // Reset should return 0 and not cause errors
@@ -238,7 +238,7 @@ class FixedWindowRateLimiterTest extends TestCase
         }
         
         // Verify keys were created
-        $keysBefore = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $keysBefore = $this->redis->keys("cm-fixed:{$key}:*");
         $this->assertGreaterThan(0, count($keysBefore), 'Should have created multiple window keys');
         
         // SCAN-based reset should handle all keys without blocking
@@ -250,7 +250,7 @@ class FixedWindowRateLimiterTest extends TestCase
         $this->assertLessThan(1.0, $endTime - $startTime, 'SCAN operation should complete quickly');
         
         // Verify cleanup
-        $keysAfter = $this->redis->keys("fixed_rate_limiter:{$key}:*");
+        $keysAfter = $this->redis->keys("cm-fixed:{$key}:*");
         $this->assertEmpty($keysAfter, 'All keys should be deleted');
     }
 }

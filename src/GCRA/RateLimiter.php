@@ -94,6 +94,6 @@ class RateLimiter implements RateLimiterInterface
 
     private function getKeyWithPrefix(string $key): string
     {
-        return "gcra_rate_limiter:{$key}";
+        return "cm-gcra:{$key}";
     }
 }
