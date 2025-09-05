@@ -34,7 +34,16 @@ class RateLimiterPlayground
     
     public function __construct()
     {
-        // Initialize Redis connection
+        // Redis connection will be initialized lazily when needed
+        // This allows "algorithm=none" to work without Redis
+    }
+    
+    private function initializeRedis(): void
+    {
+        if ($this->redis !== null) {
+            return; // Already initialized
+        }
+        
         try {
             $redisHost = getenv('REDIS_HOST') ?: 'redis';
             $redisPort = (int)(getenv('REDIS_PORT') ?: 6379);
@@ -43,7 +52,7 @@ class RateLimiterPlayground
             $this->redis->ping();
             $this->factory = new RateLimiterFactory($this->redis);
         } catch (Exception $e) {
-            $this->sendErrorResponse("Redis connection failed: " . $e->getMessage(), 500);
+            throw new Exception("Redis connection failed: " . $e->getMessage());
         }
     }
     
@@ -128,7 +137,7 @@ class RateLimiterPlayground
     
     private function validateParameters(array $params): void
     {
-        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra', 'token'];
+        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra', 'token', 'none'];
         if (!in_array($params['algorithm'], $validAlgorithms)) {
             throw new InvalidArgumentException(
                 "Invalid algorithm '{$params['algorithm']}'. Valid options: " .
@@ -162,13 +171,21 @@ class RateLimiterPlayground
         $algorithm = $params['algorithm'];
         $useConcurrency = $params['concurrent'] > 0;
         
-        // Create rate limiter (with or without concurrency control)
-        $limiter = $this->createLimiter($algorithm, $useConcurrency);
-        
         // Simulate random error if configured
         if ($params['error_chance'] > 0 && mt_rand() / mt_getrandmax() < $params['error_chance']) {
             throw new Exception("Simulated error (error_chance={$params['error_chance']})");
         }
+        
+        // Handle "none" algorithm - skip rate limiting entirely for performance baseline
+        if ($algorithm === 'none') {
+            return $this->executeNoRateLimitTest($params, $startTime);
+        }
+        
+        // Initialize Redis connection for rate limiting algorithms
+        $this->initializeRedis();
+        
+        // Create rate limiter (with or without concurrency control)
+        $limiter = $this->createLimiter($algorithm, $useConcurrency);
         
         // Execute rate limit check
         if ($useConcurrency) {
@@ -182,6 +199,11 @@ class RateLimiterPlayground
     
     private function createLimiter($algorithm, bool $useConcurrency = false)
     {
+        // Handle "none" algorithm early to avoid Redis initialization
+        if ($algorithm === 'none') {
+            return null;
+        }
+        
         // Create the base rate limiter
         $baseLimiter = match ($algorithm) {
             'sliding' => $this->factory->createSlidingWindow(),
@@ -193,11 +215,55 @@ class RateLimiterPlayground
         };
         
         // Wrap with concurrency control if requested
-        if ($useConcurrency) {
+        if ($useConcurrency && $baseLimiter !== null) {
             return new \Cm\RateLimiter\ConcurrencyAware\RateLimiter($this->redis, $baseLimiter);
         }
         
         return $baseLimiter;
+    }
+    
+    private function executeNoRateLimitTest(array $params, float $startTime): array
+    {
+        // Simulate slow request processing without any rate limiting
+        $sleepDuration = 0;
+        if ($params['sleep'] > 0) {
+            $processingStart = microtime(true);
+            usleep((int)($params['sleep'] * 1000000));
+            $processingEnd = microtime(true);
+            $sleepDuration = $processingEnd - $processingStart;
+        }
+        
+        $totalDuration = (microtime(true) - $startTime) * 1000;
+        
+        return [
+            'success' => true, // Always successful when no rate limiting
+            'algorithm' => 'none',
+            'rate_limit_result' => [
+                'successful' => true,
+                'retry_after' => 0,
+                'retries_left' => PHP_INT_MAX,
+                'limit' => PHP_INT_MAX,
+                'available_at' => time(),
+            ],
+            'concurrency_result' => null,
+            'timing' => [
+                'rate_limit_check_ms' => 0.0, // No rate limit check performed
+                'processing_time_ms' => round($sleepDuration * 1000, 3),
+                'total_request_ms' => round($totalDuration, 3)
+            ],
+            'request_info' => [
+                'timestamp' => date('Y-m-d H:i:s'),
+                'request_id' => $params['request_id'],
+                'key' => $params['key'],
+                'parameters' => $this->getPublicParameters($params)
+            ],
+            'debugging' => $params['debug'] ? [
+                'server_time' => date('Y-m-d H:i:s'),
+                'memory_usage' => memory_get_usage(true),
+                'peak_memory' => memory_get_peak_usage(true),
+                'note' => 'No rate limiting applied - performance baseline mode'
+            ] : null
+        ];
     }
     
     private function executeStandardTest($limiter, array $params, float $startTime): array
@@ -337,24 +403,30 @@ class RateLimiterPlayground
             'peak_memory' => memory_get_peak_usage(true),
         ];
         
+        // Skip rate limiter debugging for "none" algorithm
+        if ($params['algorithm'] === 'none' || $limiter === null) {
+            $debug['note'] = 'No rate limiting applied - performance baseline mode';
+            return $debug;
+        }
+        
         try {
             $debug['current_attempts'] = $limiter->attempts($params['key'], $params['window']);
             $debug['remaining_attempts'] = $limiter->remaining(
-                $params['key'], 
-                $params['burst'], 
-                $params['rate'], 
+                $params['key'],
+                $params['burst'],
+                $params['rate'],
                 $params['window']
             );
             $debug['available_in_seconds'] = $limiter->availableIn(
-                $params['key'], 
-                $params['burst'], 
-                $params['rate'], 
+                $params['key'],
+                $params['burst'],
+                $params['rate'],
                 $params['window']
             );
             
             if ($limiter instanceof ConcurrencyAwareRateLimiterInterface) {
                 $debug['current_concurrency'] = $limiter->currentConcurrency(
-                    $params['key'], 
+                    $params['key'],
                     $params['timeout']
                 );
             }
@@ -512,6 +584,9 @@ class RateLimiterPlayground
             
             <p><strong>Simulate Errors:</strong><br>
             <code>?algorithm=token&key=test&burst=5&rate=1.0&error_chance=0.1</code></p>
+            
+            <p><strong>Performance Baseline (No Rate Limiting):</strong><br>
+            <code>?algorithm=none&key=baseline&sleep=0.1&format=json</code></p>
         </div>
         
         <div class='footer'>
@@ -586,7 +661,7 @@ class RateLimiterPlayground
         <div class='section'>
             <h3>📋 Available Parameters</h3>
             <ul>
-                <li><code>algorithm</code> - Algorithm to use: sliding, fixed, leaky, gcra, token</li>
+                <li><code>algorithm</code> - Algorithm to use: sliding, fixed, leaky, gcra, token, none</li>
                 <li><code>key</code> - Rate limit key (default: playground_test)</li>
                 <li><code>burst</code> - Burst capacity (default: 10)</li>
                 <li><code>rate</code> - Sustained rate per second (default: 2.0)</li>
@@ -614,6 +689,9 @@ class RateLimiterPlayground
 
 # Fixed window with concurrency control
 ?algorithm=fixed&key=test&burst=5&rate=1.0&concurrent=2&error_chance=0.1
+
+# No rate limiting - performance baseline test
+?algorithm=none&key=baseline&sleep=0.1&format=json
             </pre>
         </div>
         
@@ -629,7 +707,7 @@ class RateLimiterPlayground
                 header('Content-Type: application/json');
             }
             echo json_encode(['help' => 'Rate Limiter Playground Help', 'parameters' => [
-                'algorithm' => 'sliding, fixed, leaky, gcra, token',
+                'algorithm' => 'sliding, fixed, leaky, gcra, token, none',
                 'key' => 'Rate limit key',
                 'burst' => 'Burst capacity',
                 'rate' => 'Sustained rate per second',
