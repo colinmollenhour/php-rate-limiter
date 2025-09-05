@@ -1,6 +1,6 @@
 {
     "name": "colinmollenhour/rate-limiter",
-    "description": "A flexible rate limiter library for PHP with multiple algorithms and concurrency control.",
+    "description": "A standalone concurrency and rate limiter with Token Bucket, GCRA, Leaky Bucket, Sliding Window and Fixed Window algorithms using a Redis-compatible server.",
     "type": "library",
     "license": "MIT",
     "require": {
