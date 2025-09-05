@@ -7,15 +7,15 @@
  * Perfect for demonstrating concurrency-aware rate limiting and slow request scenarios.
  * 
  * Usage Examples:
- * 
- * Basic rate limiting test:
+ *
+ * Basic rate limiting test (no concurrency control):
  * http://localhost/playground.php?algorithm=sliding&key=user123&burst=5&rate=2.0&window=60
- * 
- * Concurrency-aware test with slow requests:
- * http://localhost/playground.php?algorithm=concurrency&key=api&concurrent=3&burst=10&rate=5.0&sleep=2&timeout=30
- * 
- * Compare algorithms:
- * http://localhost/playground.php?algorithm=gcra&key=test&burst=10&rate=1.0&sleep=0.5&format=json
+ *
+ * GCRA with concurrency control and slow requests:
+ * http://localhost/playground.php?algorithm=gcra&key=api&concurrent=3&burst=10&rate=5.0&sleep=2&timeout=30
+ *
+ * Compare algorithms with JSON output:
+ * http://localhost/playground.php?algorithm=token&key=test&burst=10&rate=1.0&concurrent=0&format=json
  */
 
 ini_set('display_errors', '1');
@@ -47,8 +47,15 @@ class RateLimiterPlayground
         }
     }
     
-    public function handleRequest(): void
+    public function handleRequest(array $get = null, array $post = null, array $cookie = null, array $files = null, array $server = null): void
     {
+        // Use provided superglobals or fall back to actual superglobals
+        $get = $get ?? $_GET;
+        $post = $post ?? $_POST;
+        $cookie = $cookie ?? $_COOKIE;
+        $files = $files ?? $_FILES;
+        $server = $server ?? $_SERVER;
+        
         $startTime = microtime(true);
         
         try {
@@ -59,13 +66,13 @@ class RateLimiterPlayground
                 header('Access-Control-Allow-Headers: Content-Type');
 
                 // Handle preflight requests
-                if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
+                if (($server['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
                     http_response_code(200);
                     return;
                 }
             }
             
-            $params = $this->parseParameters();
+            $params = $this->parseParameters($get, $server);
             
             // Show help if requested
             if ($params['help']) {
@@ -87,35 +94,33 @@ class RateLimiterPlayground
         }
     }
     
-    private function parseParameters(): array
+    private function parseParameters(array $get, array $server): array
     {
-        $args = $_GET;
-        
         $params = [
             // Core parameters
-            'algorithm' => $args['algorithm'] ?? 'sliding',
-            'key' => $args['key'] ?? 'playground_test',
-            'burst' => (int)($args['burst'] ?? 10),
-            'rate' => (float)($args['rate'] ?? 2.0),
-            'window' => (int)($args['window'] ?? 60),
+            'algorithm' => $get['algorithm'] ?? 'sliding',
+            'key' => $get['key'] ?? 'playground_test',
+            'burst' => (int)($get['burst'] ?? 10),
+            'rate' => (float)($get['rate'] ?? 2.0),
+            'window' => (int)($get['window'] ?? 60),
             
             // Concurrency parameters
-            'concurrent' => (int)($args['concurrent'] ?? 5),
-            'timeout' => (int)($args['timeout'] ?? 30),
+            'concurrent' => (int)($get['concurrent'] ?? 0),
+            'timeout' => (int)($get['timeout'] ?? 30),
             
-            // Simulation parameters  
-            'sleep' => (float)($args['sleep'] ?? 0),
-            'error_chance' => (float)($args['error_chance'] ?? 0),
+            // Simulation parameters
+            'sleep' => (float)($get['sleep'] ?? 0),
+            'error_chance' => (float)($get['error_chance'] ?? 0),
             
             // Output parameters
-            'format' => $args['format'] ?? 'html',
-            'debug' => isset($args['debug']),
-            'help' => isset($args['help']),
+            'format' => $get['format'] ?? 'html',
+            'debug' => isset($get['debug']),
+            'help' => isset($get['help']),
             
             // Request metadata
-            'request_id' => $args['request_id'] ?? uniqid('req_', true),
-            'user_ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
-            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown'
+            'request_id' => $get['request_id'] ?? uniqid('req_', true),
+            'user_ip' => $server['REMOTE_ADDR'] ?? 'unknown',
+            'user_agent' => $server['HTTP_USER_AGENT'] ?? 'unknown'
         ];
         
         return $params;
@@ -123,10 +128,10 @@ class RateLimiterPlayground
     
     private function validateParameters(array $params): void
     {
-        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra', 'token', 'concurrency'];
+        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra', 'token'];
         if (!in_array($params['algorithm'], $validAlgorithms)) {
             throw new InvalidArgumentException(
-                "Invalid algorithm '{$params['algorithm']}'. Valid options: " . 
+                "Invalid algorithm '{$params['algorithm']}'. Valid options: " .
                 implode(', ', $validAlgorithms)
             );
         }
@@ -155,9 +160,10 @@ class RateLimiterPlayground
     private function executeRateLimitTest(array $params, float $startTime): array
     {
         $algorithm = $params['algorithm'];
+        $useConcurrency = $params['concurrent'] > 0;
         
-        // Create rate limiter
-        $limiter = $this->createLimiter($algorithm);
+        // Create rate limiter (with or without concurrency control)
+        $limiter = $this->createLimiter($algorithm, $useConcurrency);
         
         // Simulate random error if configured
         if ($params['error_chance'] > 0 && mt_rand() / mt_getrandmax() < $params['error_chance']) {
@@ -165,7 +171,7 @@ class RateLimiterPlayground
         }
         
         // Execute rate limit check
-        if ($algorithm === 'concurrency') {
+        if ($useConcurrency) {
             $result = $this->executeConcurrencyAwareTest($limiter, $params, $startTime);
         } else {
             $result = $this->executeStandardTest($limiter, $params, $startTime);
@@ -174,17 +180,24 @@ class RateLimiterPlayground
         return $result;
     }
     
-    private function createLimiter($algorithm)
+    private function createLimiter($algorithm, bool $useConcurrency = false)
     {
-        return match ($algorithm) {
+        // Create the base rate limiter
+        $baseLimiter = match ($algorithm) {
             'sliding' => $this->factory->createSlidingWindow(),
             'fixed' => $this->factory->createFixedWindow(),
             'leaky' => $this->factory->createLeakyBucket(),
             'gcra' => $this->factory->createGCRA(),
             'token' => $this->factory->createTokenBucket(),
-            'concurrency' => $this->factory->createConcurrencyAware(),
             default => throw new InvalidArgumentException("Unknown algorithm: {$algorithm}")
         };
+        
+        // Wrap with concurrency control if requested
+        if ($useConcurrency) {
+            return new \Cm\RateLimiter\ConcurrencyAware\RateLimiter($this->redis, $baseLimiter);
+        }
+        
+        return $baseLimiter;
     }
     
     private function executeStandardTest($limiter, array $params, float $startTime): array
@@ -574,12 +587,12 @@ class RateLimiterPlayground
         <div class='section'>
             <h3>📋 Available Parameters</h3>
             <ul>
-                <li><code>algorithm</code> - Algorithm to use: sliding, fixed, leaky, gcra, token, concurrency</li>
+                <li><code>algorithm</code> - Algorithm to use: sliding, fixed, leaky, gcra, token</li>
                 <li><code>key</code> - Rate limit key (default: playground_test)</li>
                 <li><code>burst</code> - Burst capacity (default: 10)</li>
                 <li><code>rate</code> - Sustained rate per second (default: 2.0)</li>
                 <li><code>window</code> - Time window in seconds (default: 60)</li>
-                <li><code>concurrent</code> - Max concurrent requests for concurrency algorithm (default: 5)</li>
+                <li><code>concurrent</code> - Max concurrent requests (0=disabled, >0=enabled, default: 0)</li>
                 <li><code>timeout</code> - Concurrency timeout in seconds (default: 30)</li>
                 <li><code>sleep</code> - Simulate slow processing in seconds (default: 0)</li>
                 <li><code>error_chance</code> - Probability of simulated error 0-1 (default: 0)</li>
@@ -591,17 +604,17 @@ class RateLimiterPlayground
         <div class='section'>
             <h3>💡 Example URLs</h3>
             <pre>
-# Basic sliding window test
+# Basic sliding window test (no concurrency control)
 ?algorithm=sliding&key=user123&burst=5&rate=2.0&window=60
 
-# Concurrency-aware with slow requests
-?algorithm=concurrency&key=api&concurrent=3&burst=10&rate=5.0&sleep=2
+# GCRA with concurrency control and slow requests
+?algorithm=gcra&key=api&concurrent=3&burst=10&rate=5.0&sleep=2
 
-# JSON response with debug info
-?algorithm=gcra&key=test&burst=10&rate=1.0&format=json&debug=1
+# Token bucket without concurrency control
+?algorithm=token&key=test&burst=10&rate=1.0&concurrent=0&format=json&debug=1
 
-# Simulate errors
-?algorithm=token&key=test&burst=5&rate=1.0&error_chance=0.1
+# Fixed window with concurrency control
+?algorithm=fixed&key=test&burst=5&rate=1.0&concurrent=2&error_chance=0.1
             </pre>
         </div>
         
@@ -617,7 +630,7 @@ class RateLimiterPlayground
                 header('Content-Type: application/json');
             }
             echo json_encode(['help' => 'Rate Limiter Playground Help', 'parameters' => [
-                'algorithm' => 'sliding, fixed, leaky, gcra, token, concurrency',
+                'algorithm' => 'sliding, fixed, leaky, gcra, token',
                 'key' => 'Rate limit key',
                 'burst' => 'Burst capacity',
                 'rate' => 'Sustained rate per second',
@@ -635,27 +648,33 @@ class RateLimiterPlayground
     }
 }
 
+$app = new RateLimiterPlayground();
+
 // Check if we're running in FrankenPHP worker mode
-if (function_exists('frankenphp_handle_request') && getenv('FRANKENPHP_WORKER')) {
-    // FrankenPHP worker mode
-    ignore_user_abort(true);
-    
-    $app = new RateLimiterPlayground();
-    
-    $handler = static function () use ($app) {
-        ob_start();
-        $app->handleRequest();
-        return ob_get_clean();
-    };
-    
-    $maxRequests = (int)($_SERVER['MAX_REQUESTS'] ?? 0);
-    for ($nbRequests = 0; !$maxRequests || $nbRequests < $maxRequests; ++$nbRequests) {
-        $keepRunning = \frankenphp_handle_request($handler);
-        gc_collect_cycles();
-        if (!$keepRunning) break;
+// Worker mode is detected by checking if we're being called as a worker script
+if (function_exists('frankenphp_handle_request')) {
+    // Try to determine if we're in worker mode by attempting to call the function
+    try {
+        // FrankenPHP worker mode
+        ignore_user_abort(true);
+        
+        
+        $handler = static function () use ($app) {
+            $app->handleRequest($_GET, $_POST, $_COOKIE, $_FILES, $_SERVER);
+        };
+        
+        $maxRequests = (int)($_SERVER['MAX_REQUESTS'] ?? 0);
+        for ($nbRequests = 0; !$maxRequests || $nbRequests < $maxRequests; ++$nbRequests) {
+            $keepRunning = \frankenphp_handle_request($handler);
+            gc_collect_cycles();
+            if (!$keepRunning) break;
+        }
+        echo "Shut down after {$nbRequests} requests.\n";
+    } catch (RuntimeException $e) {
+        echo $e . "\n";
+        exit(1);
     }
 } else {
     // Regular PHP mode
-    $app = new RateLimiterPlayground();
     $app->handleRequest();
 }

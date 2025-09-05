@@ -6,24 +6,18 @@
 
 :8080 {
     # Set document root
-    root * /app/public
-    
-    # Enable PHP processing with FrankenPHP
-    php_server
-    
-    # Route all requests to index.php
-    try_files {path} /index.php
-    
-    # Handle static files
-    file_server off
-    
-    # Add CORS headers
-    header {
-        Access-Control-Allow-Origin *
-        Access-Control-Allow-Methods "GET, POST, OPTIONS"
-        Access-Control-Allow-Headers "Content-Type"
+    root /app/public
+
+    php_server {
+        root /app/public
+        file_server off
+        worker {
+            file index.php
+            watch /app/public/index.php
+            watch /app/src
+        }
     }
-    
+
     # Handle preflight requests
     @options method OPTIONS
     respond @options 200
