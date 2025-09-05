@@ -2,12 +2,15 @@
 
 namespace Cm\RateLimiter\FixedWindow;
 
+use Cm\RateLimiter\EvalShaHelper;
 use Cm\RateLimiter\RateLimiterInterface;
 use Cm\RateLimiter\RateLimiterResult;
 use Credis_Client;
 
 class RateLimiter implements RateLimiterInterface
 {
+    use EvalShaHelper;
+
     protected array $limiters = [];
     protected Credis_Client $redis;
 
@@ -40,7 +43,7 @@ class RateLimiter implements RateLimiterInterface
         
         $keys = [$this->getKeyWithPrefix($key)];
         $args = [$window, $maxAttempts];
-        [$retryAfter, $retriesLeft, $limit] = $this->redis->eval(LuaScripts::attempt(), $keys, $args);
+        [$retryAfter, $retriesLeft, $limit] = $this->evalSha($this->redis, LuaScripts::attempt(), LuaScripts::ATTEMPT_SHA, $keys, $args);
 
         return new RateLimiterResult($retryAfter, $retriesLeft, $limit);
     }
@@ -60,7 +63,7 @@ class RateLimiter implements RateLimiterInterface
         $keys = [$this->getKeyWithPrefix($key)];
         $args = [$window];
 
-        return $this->redis->eval(LuaScripts::attempts(), $keys, $args);
+        return $this->evalSha($this->redis, LuaScripts::attempts(), LuaScripts::ATTEMPTS_SHA, $keys, $args);
     }
 
     public function resetAttempts(string $key): mixed
@@ -68,7 +71,7 @@ class RateLimiter implements RateLimiterInterface
         $keys = [$this->getKeyWithPrefix($key)];
         $args = [];
 
-        return $this->redis->eval(LuaScripts::resetAttempts(), $keys, $args);
+        return $this->evalSha($this->redis, LuaScripts::resetAttempts(), LuaScripts::RESETATTEMPTS_SHA, $keys, $args);
     }
 
     public function remaining(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): int
@@ -90,7 +93,7 @@ class RateLimiter implements RateLimiterInterface
         $keys = [$this->getKeyWithPrefix($key)];
         $args = [$window, $maxAttempts];
 
-        return $this->redis->eval(LuaScripts::availableIn(), $keys, $args);
+        return $this->evalSha($this->redis, LuaScripts::availableIn(), LuaScripts::AVAILABLEIN_SHA, $keys, $args);
     }
 
     public function retriesLeft(string $key, int $burstCapacity, float $sustainedRate, int $window = 60): int

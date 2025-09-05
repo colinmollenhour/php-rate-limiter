@@ -4,6 +4,11 @@ namespace Cm\RateLimiter\SlidingWindow;
 
 class LuaScripts
 {
+    // SHA1 hashes for Lua scripts
+    public const ATTEMPT_SHA = 'd3f5353abf11c3ce2f7addb4091d05e7782da5d5';
+    public const ATTEMPTS_SHA = 'dd37b06f631076e8714fea7ac014d19a29a678fd';
+    public const AVAILABLEIN_SHA = 'c0b6154c242c12f0d59a294791845321c36ea998';
+
     public static function attempt(): string
     {
         return <<<'LUA'

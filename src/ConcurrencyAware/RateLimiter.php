@@ -4,12 +4,15 @@ namespace Cm\RateLimiter\ConcurrencyAware;
 
 use Cm\RateLimiter\ConcurrencyAwareRateLimiterInterface;
 use Cm\RateLimiter\ConcurrencyAwareResult;
+use Cm\RateLimiter\EvalShaHelper;
 use Cm\RateLimiter\RateLimiterInterface;
 use Cm\RateLimiter\RateLimiterResult;
 use Credis_Client;
 
 class RateLimiter implements ConcurrencyAwareRateLimiterInterface
 {
+    use EvalShaHelper;
+
     protected array $limiters = [];
     protected Credis_Client $redis;
     protected ?RateLimiterInterface $rateLimiter;
@@ -105,7 +108,7 @@ class RateLimiter implements ConcurrencyAwareRateLimiterInterface
         $keys = [$concurrencyKey];
         $args = [$requestId, $maxConcurrent, $timeoutSeconds];
         
-        $result = $this->redis->eval(LuaScripts::checkConcurrency(), $keys, $args);
+        $result = $this->evalSha($this->redis, LuaScripts::checkConcurrency(), LuaScripts::CHECKCONCURRENCY_SHA, $keys, $args);
         
         return [
             'acquired' => (bool)$result[0],
@@ -119,7 +122,7 @@ class RateLimiter implements ConcurrencyAwareRateLimiterInterface
         $keys = [$concurrencyKey];
         $args = [$requestId];
         
-        $this->redis->eval(LuaScripts::releaseConcurrency(), $keys, $args);
+        $this->evalSha($this->redis, LuaScripts::releaseConcurrency(), LuaScripts::RELEASECONCURRENCY_SHA, $keys, $args);
     }
 
     public function currentConcurrency(string $key, int $timeoutSeconds = 30): int
@@ -128,7 +131,7 @@ class RateLimiter implements ConcurrencyAwareRateLimiterInterface
         $keys = [$concurrencyKey];
         $args = [$timeoutSeconds];
         
-        return (int) $this->redis->eval(LuaScripts::currentConcurrency(), $keys, $args);
+        return (int) $this->evalSha($this->redis, LuaScripts::currentConcurrency(), LuaScripts::CURRENTCONCURRENCY_SHA, $keys, $args);
     }
 
     public function cleanupExpiredConcurrency(string $key, int $timeoutSeconds = 30): int
@@ -137,7 +140,7 @@ class RateLimiter implements ConcurrencyAwareRateLimiterInterface
         $keys = [$concurrencyKey];
         $args = [$timeoutSeconds];
         
-        return $this->redis->eval(LuaScripts::cleanupExpired(), $keys, $args);
+        return $this->evalSha($this->redis, LuaScripts::cleanupExpired(), LuaScripts::CLEANUPEXPIRED_SHA, $keys, $args);
     }
 
     // Implement existing RateLimiterInterface methods by delegating to the injected rate limiter

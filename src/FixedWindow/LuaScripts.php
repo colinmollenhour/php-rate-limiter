@@ -4,6 +4,12 @@ namespace Cm\RateLimiter\FixedWindow;
 
 class LuaScripts
 {
+    // SHA1 hashes for Lua scripts
+    public const ATTEMPT_SHA = '70142323ec50fdfd4ece46f081c418840e8f41d5';
+    public const ATTEMPTS_SHA = '41d3109b4aeb1f0509c4307b136b4bcde280c491';
+    public const AVAILABLEIN_SHA = 'e0aef0574fd6ef0dd5994c37adce363b8bdae8ae';
+    public const RESETATTEMPTS_SHA = '4671b302f7371df0f5eaeecb854ac3678a2cdc3e';
+
     public static function attempt(): string
     {
         return <<<'LUA'

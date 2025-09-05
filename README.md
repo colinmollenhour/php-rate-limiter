@@ -328,7 +328,7 @@ $fixedWindow = new \Cm\RateLimiter\FixedWindow\RateLimiter($redis);
 $leakyBucket = new \Cm\RateLimiter\LeakyBucket\RateLimiter($redis);
 $gcra = new \Cm\RateLimiter\GCRA\RateLimiter($redis);
 $tokenBucket = new \Cm\RateLimiter\TokenBucket\RateLimiter($redis);
-$concurrencyAware = new \Cm\RateLimiter\ConcurrencyAware\RateLimiter($redis);
+$concurrencyAware = new \Cm\RateLimiter\ConcurrencyAware\RateLimiter($redis, $tokenBucket);
 ```
 
 ### Result Objects
@@ -363,6 +363,71 @@ class ConcurrencyAwareResult extends RateLimiterResult {
 $tokenBucket = $factory->createTokenBucket();
 // Allow 20 requests immediately, then 5 requests/second
 $result = $tokenBucket->attempt("api:{$userId}", 20, 5.0, 60);
+```
+
+### Concurrency-Aware API with Token Bucket
+```php
+// Perfect for APIs with bursty traffic AND slow backend operations
+$limiter = $factory->createConcurrencyAware('token');
+$requestId = uniqid('req_', true);
+
+$result = $limiter->attemptWithConcurrency(
+    key: "api:upload:{$userId}",
+    requestId: $requestId,
+    maxConcurrent: 3,        // Max 3 concurrent uploads per user
+    burstCapacity: 10,       // Allow 10 uploads immediately
+    sustainedRate: 2.0,      // Then 2 uploads/second sustained
+    window: 60,              // 60-second rate limit window
+    timeoutSeconds: 300      // 5-minute timeout for slow uploads
+);
+
+if ($result->successful()) {
+    try {
+        // Process file upload - guaranteed max 3 concurrent + 2/s rate
+        processFileUpload($file);
+    } finally {
+        // Always release concurrency slot when done
+        $limiter->releaseConcurrency("api:upload:{$userId}", $requestId);
+    }
+} elseif ($result->rejectedByConcurrency()) {
+    // Too many concurrent uploads - don't count against rate limit
+    http_response_code(503);
+    echo "Too many concurrent uploads. Try again shortly.";
+} else {
+    // Rate limit exceeded
+    http_response_code(429);
+    header("Retry-After: " . $result->retryAfter);
+    echo "Upload rate limit exceeded. Try again in {$result->retryAfter} seconds.";
+}
+```
+
+### Pure Concurrency Control (No Rate Limiting)
+```php
+// Perfect for resource-intensive operations like database migrations or heavy processing
+$limiter = $factory->createConcurrencyAware(null); // null = no rate limiting
+$jobId = uniqid('job_', true);
+
+$result = $limiter->attemptWithConcurrency(
+    key: 'jobs:heavy-processing',
+    requestId: $jobId,
+    maxConcurrent: 2,        // Only 2 heavy jobs at once
+    burstCapacity: 0,        // No rate limiting
+    sustainedRate: 0,        // No rate limiting
+    window: 0,               // No rate limiting
+    timeoutSeconds: 1800     // 30-minute timeout for long jobs
+);
+
+if ($result->successful()) {
+    try {
+        // Process heavy job - guaranteed max 2 concurrent, no rate limits
+        processHeavyJob($jobData);
+    } finally {
+        $limiter->releaseConcurrency('jobs:heavy-processing', $jobId);
+    }
+} else {
+    // Only concurrency rejection possible (no rate limiting)
+    echo "Too many concurrent jobs. Current: {$result->currentConcurrency}/{$result->maxConcurrency}";
+}
 ```
 
 ### Smooth Rate Limiting
@@ -501,6 +566,64 @@ php stress-test.php --latency-precision=5 --algorithms=gcra,sliding --scenarios=
 
 # Memory-efficient latency sampling for long tests
 php stress-test.php --latency-sample=100 --max-speed --duration=30 --processes=10
+```
+
+#### HTTP Load Testing with "hey" CLI
+
+For real-world HTTP load testing against the playground, use the [`hey`](https://github.com/rakyll/hey) CLI tool.
+
+**Basic Load Testing:**
+```bash
+# Start the playground first
+cd playground && docker-compose up -d
+
+# Test GCRA algorithm with concurrency control
+hey -n 1000 -c 50 -q 10 "http://localhost:8080/?algorithm=gcra&key=api&burst=20&rate=5.0&concurrent=10&format=json"
+
+# Test token bucket without concurrency (pure rate limiting)
+hey -n 500 -c 20 -q 5 "http://localhost:8080/?algorithm=token&key=api&burst=10&rate=2.0&concurrent=0&format=json"
+
+# Test pure concurrency limiting (no rate limits)
+hey -n 200 -c 15 "http://localhost:8080/?algorithm=gcra&key=jobs&burst=0&rate=0&concurrent=5&sleep=1&format=json"
+```
+
+**Advanced Load Testing Scenarios:**
+```bash
+# Burst traffic simulation - high concurrency, short duration
+hey -n 2000 -c 100 -t 30 "http://localhost:8080/?algorithm=token&key=burst&burst=50&rate=10.0&concurrent=20&format=json"
+
+# Sustained load test - moderate concurrency, longer duration
+hey -n 5000 -c 25 -q 15 -t 60 "http://localhost:8080/?algorithm=gcra&key=sustained&burst=30&rate=8.0&concurrent=15&format=json"
+
+# Slow request simulation - test concurrency limits with delays
+hey -n 100 -c 20 -t 120 "http://localhost:8080/?algorithm=sliding&key=slow&burst=10&rate=2.0&concurrent=5&sleep=3&format=json"
+
+# Algorithm comparison - same parameters, different algorithms
+hey -n 1000 -c 30 -q 12 "http://localhost:8080/?algorithm=gcra&key=compare&burst=25&rate=6.0&concurrent=8&format=json"
+hey -n 1000 -c 30 -q 12 "http://localhost:8080/?algorithm=token&key=compare&burst=25&rate=6.0&concurrent=8&format=json"
+hey -n 1000 -c 30 -q 12 "http://localhost:8080/?algorithm=sliding&key=compare&burst=25&rate=6.0&concurrent=8&format=json"
+```
+
+**Key "hey" Parameters:**
+- `-n` - Total number of requests
+- `-c` - Number of concurrent workers
+- `-q` - Rate limit (requests per second per worker)
+- `-t` - Timeout for each request (seconds)
+- `-d` - Duration of test (alternative to `-n`)
+
+**Expected Results:**
+- **200 OK** - Request allowed by both rate and concurrency limits
+- **429 Too Many Requests** - Rate limit exceeded (`Retry-After` header included)
+- **503 Service Unavailable** - Concurrency limit exceeded (try again shortly)
+
+**Monitoring During Tests:**
+```bash
+# Watch Redis keys in real-time
+docker-compose exec redis redis-cli --scan --pattern "*rate_limiter*" | head -10
+docker-compose exec redis redis-cli --scan --pattern "concurrency:*" | head -10
+
+# Monitor playground logs
+docker-compose logs -f app
 ```
 
 #### Test Scenarios

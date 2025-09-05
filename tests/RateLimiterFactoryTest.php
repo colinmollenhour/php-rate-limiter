@@ -31,6 +31,7 @@ class RateLimiterFactoryTest extends TestCase
     protected function tearDown(): void
     {
         $this->redis->flushdb();
+        $this->redis->script('FLUSH');
     }
 
     public function testCreateSlidingWindow(): void

@@ -4,6 +4,12 @@ namespace Cm\RateLimiter\LeakyBucket;
 
 class LuaScripts
 {
+    // SHA1 hashes for Lua scripts
+    public const ATTEMPT_SHA = 'f071db52a3de9d573e08dc4f851fafc927620762';
+    public const ATTEMPTS_SHA = 'fa962095f632bc9bd24658c8b12a41cdae89998e';
+    public const AVAILABLEIN_SHA = 'dabba91a59ab9a91b3228101dd61780da3670f71';
+    public const RESETATTEMPTS_SHA = '85a2f7f040afae2f26b0bbfc9feea443b159b28e';
+
     public static function attempt(): string
     {
         return <<<'LUA'

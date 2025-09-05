@@ -4,6 +4,13 @@ namespace Cm\RateLimiter\TokenBucket;
 
 class LuaScripts
 {
+    // SHA1 hashes for Lua scripts
+    public const ATTEMPT_SHA = '2b0ed9096885ea7dba14aa1a28fb2f4baaa82006';
+    public const ATTEMPTS_SHA = '2ca3118316adc7e45e986857ad62aeee975fb0ab';
+    public const TOKENSREMAINING_SHA = 'a11272ac2baa4ba02c34dc40901bb0a35c92edee';
+    public const AVAILABLEIN_SHA = '7fdb5bd935191f43f86feb6ee2cf633c0b4939dc';
+    public const RESETATTEMPTS_SHA = 'a9ea30b4d3208790b748b13f7e1708faf1f87218';
+
     public static function attempt(): string
     {
         return <<<'LUA'
