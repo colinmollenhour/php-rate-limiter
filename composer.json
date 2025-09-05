@@ -1,6 +1,6 @@
 {
-    "name": "cm/rate-limiter",
-    "description": "A flexible rate limiter library for PHP with multiple algorithms",
+    "name": "colinmollenhour/rate-limiter",
+    "description": "A flexible rate limiter library for PHP with multiple algorithms and concurrency control.",
     "type": "library",
     "license": "MIT",
     "require": {
