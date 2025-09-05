@@ -2,14 +2,6 @@
     # Global options
     auto_https off
     admin off
-
-	frankenphp {
-		worker {
-			file  /app/public/worker.php
-			watch /app/public
-            watch /app/src
-		}
-	}
 }
 
 :8080 {
@@ -21,6 +13,9 @@
     
     # Route all requests to index.php
     try_files {path} /index.php
+    
+    # Handle static files
+    file_server off
     
     # Add CORS headers
     header {
