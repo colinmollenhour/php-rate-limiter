@@ -371,10 +371,9 @@ class RateLimiterPlayground
         if (php_sapi_name() !== 'cli') {
             if (!$result['success']) {
                 if ($result['concurrency_result'] && $result['concurrency_result']['rejected_by_concurrency']) {
-                    http_response_code(503);
-                    header('Retry-After: ' . max(1, $result['rate_limit_result']['retry_after']));
+                    http_response_code(430);  // Custom code for concurrency limit (not web server limit)
                 } else {
-                    http_response_code(429);
+                    http_response_code(429);  // Standard rate limit exceeded
                     header('Retry-After: ' . $result['rate_limit_result']['retry_after']);
                 }
             } else {

@@ -21,13 +21,14 @@ class ConcurrencyAwareResult extends RateLimiterResult
         return $this->concurrencyAcquired && parent::successful();
     }
     
-    public function rejectedByConcurrency(): bool 
+    public function rejectedByConcurrency(): bool
     {
-        return !$this->concurrencyAcquired;
+        return $this->concurrencyRejectionReason === 'CONCURRENCY_LIMIT_EXCEEDED';
     }
     
     public function rejectedByRateLimit(): bool
     {
-        return $this->concurrencyAcquired && !parent::successful();
+        return $this->concurrencyRejectionReason === 'RATE_LIMIT_EXCEEDED' ||
+               ($this->concurrencyAcquired && !parent::successful());
     }
 }
