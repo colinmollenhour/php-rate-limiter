@@ -1,17 +1,18 @@
 # Cm\RateLimiter
 
-A flexible PHP library implementing 5 different rate limiting algorithms using Redis with **enhanced API supporting separate burst capacity and sustained rates**. Includes comprehensive performance testing and supports Redis alternatives like Dragonfly, KeyDB, and Valkey.
+A flexible PHP library implementing multiple rate limiting algorithms using Redis with **enhanced API supporting separate burst capacity and sustained rates** plus **concurrency-aware rate limiting** to prevent request pileup. Includes comprehensive performance testing and supports Redis alternatives like Dragonfly, KeyDB, and Valkey.
 
 > **Note:** This is a standalone fork of [bvtterfly/sliding-window-rate-limiter](https://github.com/bvtterfly/sliding-window-rate-limiter), refactored to remove Laravel dependencies and support multiple algorithms.
 
 ## Features
 
-- **5 Rate Limiting Algorithms** - Sliding Window, Fixed Window, Leaky Bucket, GCRA, Token Bucket
+- **Multiple Rate Limiting Algorithms** - Sliding Window, Fixed Window, Leaky Bucket, GCRA, Token Bucket, and Concurrency-Aware
+- **Concurrency-Aware Limiting** - Prevents request pileup from slow operations by limiting both rate AND concurrency
 - **Enhanced API** - Separate burst capacity and sustained rate parameters for fine-grained control
 - **Automatic Key Expiration** - Redis keys automatically expire to prevent memory leaks with random keys
 - **High Performance** - GCRA algorithm achieves ~25,900 RPS with sub-millisecond latency
 - **Redis Compatible** - Works with Redis, Dragonfly, KeyDB, Valkey, AWS ElastiCache
-- **Comprehensive Testing** - Multi-process stress testing with detailed performance metrics
+- **Comprehensive Testing** - Multi-process stress testing with detailed performance metrics including concurrency blocking
 - **Laravel-Free** - Standalone library with minimal dependencies (PHP 8.0+, [Credis](https://github.com/colinmollenhour/credis))
 - **Atomic Operations** - All algorithms use Lua scripts for consistency and thread safety
 
@@ -19,6 +20,57 @@ A flexible PHP library implementing 5 different rate limiting algorithms using R
 
 ```bash
 composer require cm/rate-limiter
+```
+
+### Docker Setup (FrankenPHP)
+
+Run the playground as a FrankenPHP web application with Docker:
+
+```bash
+# Clone or download the repository
+git clone <repository-url>
+cd sliding-window-rate-limiter/standalone
+
+# Navigate to playground directory
+cd playground
+
+# Start the services
+docker-compose up -d
+
+# Access the playground
+open http://localhost:8080
+```
+
+The Docker setup includes:
+- **FrankenPHP** server running the playground on port 8080
+- **Redis** server for rate limiting storage
+- **Auto-reload** during development (volume mounted)
+
+#### Docker Services
+
+- **Web App**: `http://localhost:8080` - Interactive rate limiter playground
+- **Redis**: `localhost:6379` - Redis server for testing
+
+#### Docker Commands
+
+```bash
+# Navigate to playground directory first
+cd playground
+
+# Start services in background
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+
+# Rebuild after code changes
+docker-compose up --build
+
+# Access Redis CLI
+docker-compose exec redis redis-cli
 ```
 
 ## Quick Start
@@ -41,6 +93,110 @@ if ($result->successful()) {
 } else {
     echo "Rate limited. Try again in {$result->retryAfter} seconds";
 }
+```
+
+## 🚀 Concurrency-Aware Rate Limiting
+
+**Solves the "request pileup" problem**: Even with rate limiting, slow operations can pile up and overwhelm backends.
+
+**Example Problem:**
+- Rate limit: 10 requests/second ✅  
+- Request duration: 5 seconds ⚠️
+- Result: ~40 concurrent requests piling up! ❌
+
+### Composable API Design
+
+**Any rate limiting algorithm** can be combined with concurrency control using the factory:
+
+```php
+// GCRA + concurrency control
+$limiter = $factory->createConcurrencyAware('gcra');
+
+// Token bucket + concurrency control  
+$limiter = $factory->createConcurrencyAware('token');
+
+// Pure concurrency limiting (no rate limiting)
+$limiter = $factory->createConcurrencyAware(null);
+
+// Pure rate limiting (no concurrency control)
+$limiter = $factory->createGCRA(); // or any other algorithm
+```
+
+### Quick Start with Concurrency Control
+
+```php
+// Create GCRA rate limiter with concurrency control
+$limiter = $factory->createConcurrencyAware('gcra');
+$requestId = uniqid('req_', true);
+
+$result = $limiter->attemptWithConcurrency(
+    key: 'api:user:123',
+    requestId: $requestId,
+    maxConcurrent: 5,        // Max 5 concurrent requests
+    burstCapacity: 10,       // Rate limit burst allowance  
+    sustainedRate: 2.0,      // 2 requests/second sustained
+    window: 60,              // 60-second window
+    timeoutSeconds: 30       // 30s timeout for slow requests
+);
+
+if ($result->successful()) {
+    try {
+        // Process request - guaranteed max 5 concurrent + 2/s rate
+    } finally {
+        $limiter->releaseConcurrency('api:user:123', $requestId);
+    }
+} elseif ($result->rejectedByConcurrency()) {
+    // Handle concurrency limit (don't count against rate limit)
+    http_response_code(503);
+    echo "Service temporarily unavailable";
+} else {
+    // Handle rate limit
+    http_response_code(429);
+    header("Retry-After: " . $result->retryAfter);
+    echo "Rate limit exceeded";
+}
+```
+
+### Algorithm Combinations
+
+```php
+// High-performance: GCRA + concurrency
+$limiter = $factory->createConcurrencyAware('gcra');
+
+// Burst-friendly: Token bucket + concurrency  
+$limiter = $factory->createConcurrencyAware('token');
+
+// Smooth rate: Sliding window + concurrency
+$limiter = $factory->createConcurrencyAware('sliding');
+
+// Memory efficient: Fixed window + concurrency
+$limiter = $factory->createConcurrencyAware('fixed');
+
+// Pure concurrency control (no rate limiting)
+$limiter = $factory->createConcurrencyAware(null);
+```
+
+### How It Works
+
+1. **Concurrency Check First** - Acquire a concurrency slot using Redis semaphore pattern
+2. **Rate Limit Check Second** - Only requests with concurrency slots count against rate limits  
+3. **Clear Failure Modes** - Different response codes for concurrency (503) vs rate limiting (429)
+4. **Composable Design** - Any algorithm can be combined with concurrency control
+
+### Use Cases
+
+```php
+// Web API Protection (GCRA for performance + concurrency for slow queries)
+$limiter = $factory->createConcurrencyAware('gcra');
+$result = $limiter->attemptWithConcurrency('api:search', $requestId, 5, 20, 1.0, 60, 30);
+
+// File Upload Service (Token bucket for bursts + concurrency for upload congestion)
+$limiter = $factory->createConcurrencyAware('token');
+$result = $limiter->attemptWithConcurrency('upload:user:'.$userId, $requestId, 2, 5, 0.5, 3600, 300);
+
+// Background Job Processing (Pure concurrency for resource control)
+$limiter = $factory->createConcurrencyAware(null);
+$result = $limiter->attemptWithConcurrency('jobs:heavy', $jobId, 3, 0, 0, 0, 1800);
 ```
 
 ## Algorithms
@@ -156,11 +312,13 @@ $result = $leakyBucket->attempt('user:123', 20, 1.0, 60);
 
 ### Factory Methods
 ```php
-$factory->createSlidingWindow();  // Smooth rate limiting
-$factory->createFixedWindow();    // Window-based with burst
-$factory->createLeakyBucket();    // Bucket capacity with leak
-$factory->createGCRA();           // Memory-efficient smooth limiting
-$factory->createTokenBucket();    // Perfect burst + sustained rate
+$factory->createSlidingWindow();      // Smooth rate limiting
+$factory->createFixedWindow();        // Window-based with burst
+$factory->createLeakyBucket();        // Bucket capacity with leak
+$factory->createGCRA();               // Memory-efficient smooth limiting
+$factory->createTokenBucket();        // Perfect burst + sustained rate
+$factory->createConcurrencyAware('gcra');  // GCRA + concurrency control
+$factory->createConcurrencyAware(null);   // Pure concurrency limiting
 ```
 
 ### Direct Instantiation
@@ -170,15 +328,31 @@ $fixedWindow = new \Cm\RateLimiter\FixedWindow\RateLimiter($redis);
 $leakyBucket = new \Cm\RateLimiter\LeakyBucket\RateLimiter($redis);
 $gcra = new \Cm\RateLimiter\GCRA\RateLimiter($redis);
 $tokenBucket = new \Cm\RateLimiter\TokenBucket\RateLimiter($redis);
+$concurrencyAware = new \Cm\RateLimiter\ConcurrencyAware\RateLimiter($redis);
 ```
 
-### Result Object
+### Result Objects
+
+#### Standard Rate Limiting Result
 ```php
 class RateLimiterResult {
     public function successful(): bool;     // Was the request allowed?
     public int $retryAfter;                // Seconds until next request allowed
     public int $retriesLeft;               // Requests remaining in current window
     public int $limit;                     // Total limit (burst capacity)
+}
+```
+
+#### Concurrency-Aware Result
+```php
+class ConcurrencyAwareResult extends RateLimiterResult {
+    public bool $concurrencyAcquired;           // Was concurrency slot acquired?
+    public ?string $concurrencyRejectionReason; // Why was concurrency rejected?
+    public int $currentConcurrency;              // Current concurrent requests
+    public int $maxConcurrency;                  // Maximum allowed concurrent requests
+    
+    public function rejectedByConcurrency(): bool; // Was blocked by concurrency limit?
+    public function rejectedByRateLimit(): bool;   // Was blocked by rate limit?
 }
 ```
 
@@ -220,6 +394,55 @@ composer test
 ```
 Requires Redis running on `localhost:6379`.
 
+#### Testing with Docker
+```bash
+# Run tests in Docker environment
+docker-compose exec app composer test
+
+# Or run tests with fresh Redis
+docker-compose up -d redis
+composer test
+```
+
+## 🎮 Interactive Playground
+
+The playground provides a web interface for testing rate limiting algorithms with real-time results:
+
+### Quick Examples
+
+```bash
+# GCRA rate limiting with concurrency control (concurrent=5 by default)
+GET /?algorithm=gcra&key=api&burst=10&rate=2.0&sleep=1&format=json
+
+# Token bucket without concurrency control
+GET /?algorithm=token&key=api&concurrent=0&burst=5&rate=1.0&format=json
+
+# Pure concurrency limiting (no rate limiting)  
+GET /?algorithm=sliding&key=jobs&concurrent=3&burst=0&rate=0&sleep=2&format=json
+```
+
+### Key Parameters
+
+- `algorithm` - Rate limiting algorithm (sliding, fixed, leaky, gcra, token)
+- `concurrent` - Max concurrent requests (0=disabled, default=5)  
+- `sleep` - Simulate slow requests (seconds)
+- `burst`/`rate`/`window` - Rate limiting parameters
+- `format` - Response format (html or json)
+
+### Accessing the Playground
+
+**Docker (Recommended):**
+```bash
+cd playground && docker-compose up -d
+open http://localhost:8080
+```
+
+**PHP Built-in Server:**
+```bash
+php -S localhost:8000 playground/index.php
+open http://localhost:8000
+```
+
 ### Stress Testing
 
 Comprehensive stress testing tools are included to benchmark and compare algorithms under load.
@@ -254,6 +477,12 @@ php stress-test.php
 
 # Test only GCRA algorithm with high contention for 10 seconds
 php stress-test.php --algorithms=gcra --scenarios=high --duration=10
+
+# Test algorithms with concurrency control enabled
+php stress-test.php --algorithms=gcra,token --concurrency-max=5 --limiter-rps=10 --duration=15
+
+# Compare different algorithms with and without concurrency
+php stress-test.php --algorithms=gcra,sliding --concurrency-max=10 --scenarios=high --duration=20
 
 # Custom test with 100 keys, 50 RPS rate limit, 25 burst capacity, 30 second windows
 php stress-test.php --keys=100 --limiter-rps=50 --limiter-burst=25 --limiter-window=30 --duration=15
@@ -292,6 +521,8 @@ php stress-test.php --latency-sample=100 --max-speed --duration=30 --processes=1
 - `--limiter-rps=NUM` - Rate limiter sustained rate (requests/sec)
 - `--limiter-burst=NUM` - Rate limiter burst capacity
 - `--limiter-window=SECONDS` - Time window size (default: 60s)
+- `--concurrency-max=NUM` - Maximum concurrent requests (enables concurrency mode for all algorithms)
+- `--concurrency-timeout=SECONDS` - Timeout for concurrency requests (default: 30s)
 - `--verbose` - Detailed output
 - `--no-clear` - Keep Redis data between tests
 - `--max-speed` - Performance mode: send requests as fast as possible (no throttling)
@@ -304,7 +535,9 @@ For each algorithm and scenario:
 - **Total Requests** - Total attempts made
 - **Requests/sec (RPS)** - Throughput achieved  
 - **Success Rate %** - Requests allowed through
-- **Block Rate %** - Requests blocked by rate limiting
+- **Block Rate %** - Total requests blocked (rate + concurrency)
+- **Concurrency Block %** - Requests blocked by concurrency limits (concurrency-aware algorithm only)
+- **Rate Limit Block %** - Requests blocked by rate limits
 - **Error Rate %** - System/Redis errors
 - **Duration** - Actual test execution time
 - **Latency Metrics** - Detailed latency analysis of each rate limit check:

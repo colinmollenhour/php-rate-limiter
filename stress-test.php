@@ -17,7 +17,7 @@ class StressTestRunner
     public function __construct(array $options = [])
     {
         $this->options = array_merge([
-            'algorithms' => ['sliding', 'fixed', 'leaky', 'gcra', 'token'],
+            'algorithms' => ['sliding', 'fixed', 'leaky', 'gcra', 'token', 'concurrency'],
             'scenarios' => ['all'],
             'duration' => 30,
             'processes' => 20,
@@ -28,6 +28,9 @@ class StressTestRunner
             'limiter_window' => null,
             'limiter_rps' => null,
             'limiter_burst' => null,
+            'concurrency_max' => null,
+            'concurrency_timeout' => null,
+            'use_concurrency' => false,
             'verbose' => false,
             'no_clear' => false,
             'max_speed' => false,
@@ -117,6 +120,8 @@ class StressTestRunner
                 'window' => $this->options['limiter_window'] ?? 60,
                 'limiter_rps' => $this->options['limiter_rps'],
                 'limiter_burst' => $this->options['limiter_burst'],
+                'concurrency_max' => $this->options['concurrency_max'],
+                'concurrency_timeout' => $this->options['concurrency_timeout'] ?? 30,
                 'target_rps' => $this->options['target_rps'] ?? 500
             ]];
         }
@@ -136,6 +141,8 @@ class StressTestRunner
                 'window' => $this->options['limiter_window'] ?? 60,
                 'limiter_rps' => $this->options['limiter_rps'],
                 'limiter_burst' => $this->options['limiter_burst'],
+                'concurrency_max' => $this->options['concurrency_max'] ?? 10,
+                'concurrency_timeout' => $this->options['concurrency_timeout'] ?? 30,
                 'target_rps' => $this->options['target_rps'] ?? 500
             ],
             [
@@ -149,6 +156,8 @@ class StressTestRunner
                 'window' => $this->options['limiter_window'] ?? 60,
                 'limiter_rps' => $this->options['limiter_rps'],
                 'limiter_burst' => $this->options['limiter_burst'],
+                'concurrency_max' => $this->options['concurrency_max'] ?? 15,
+                'concurrency_timeout' => $this->options['concurrency_timeout'] ?? 30,
                 'target_rps' => $this->options['target_rps'] ?? 1000
             ],
             [
@@ -162,6 +171,8 @@ class StressTestRunner
                 'window' => $this->options['limiter_window'] ?? 60,
                 'limiter_rps' => $this->options['limiter_rps'],
                 'limiter_burst' => $this->options['limiter_burst'],
+                'concurrency_max' => $this->options['concurrency_max'] ?? 25,
+                'concurrency_timeout' => $this->options['concurrency_timeout'] ?? 30,
                 'target_rps' => $this->options['target_rps'] ?? 2000
             ],
             [
@@ -175,6 +186,8 @@ class StressTestRunner
                 'window' => $this->options['limiter_window'] ?? 60,
                 'limiter_rps' => $this->options['limiter_rps'],
                 'limiter_burst' => $this->options['limiter_burst'],
+                'concurrency_max' => $this->options['concurrency_max'] ?? 5,
+                'concurrency_timeout' => $this->options['concurrency_timeout'] ?? 30,
                 'target_rps' => $this->options['target_rps'] ?? 1000
             ]
         ];
@@ -189,12 +202,16 @@ class StressTestRunner
         $results = [
             'successful' => 0,
             'blocked' => 0,
+            'blocked_by_concurrency' => 0,
+            'blocked_by_rate_limit' => 0,
             'errors' => 0,
             'total_requests' => 0,
             'duration' => 0,
             'rps' => 0,
             'success_rate' => 0,
             'block_rate' => 0,
+            'concurrency_block_rate' => 0,
+            'rate_limit_block_rate' => 0,
             'error_rate' => 0,
             'latency_avg' => 0,
             'latency_p50' => 0,
@@ -242,6 +259,8 @@ class StressTestRunner
                 if ($data) {
                     $results['successful'] += $data['successful'];
                     $results['blocked'] += $data['blocked'];
+                    $results['blocked_by_concurrency'] += $data['blocked_by_concurrency'] ?? 0;
+                    $results['blocked_by_rate_limit'] += $data['blocked_by_rate_limit'] ?? 0;
                     $results['errors'] += $data['errors'];
                     $results['total_requests'] += $data['total_requests'];
                     
@@ -264,6 +283,8 @@ class StressTestRunner
             $results['rps'] = $results['total_requests'] / $results['duration'];
             $results['success_rate'] = ($results['successful'] / $results['total_requests']) * 100;
             $results['block_rate'] = ($results['blocked'] / $results['total_requests']) * 100;
+            $results['concurrency_block_rate'] = ($results['blocked_by_concurrency'] / $results['total_requests']) * 100;
+            $results['rate_limit_block_rate'] = ($results['blocked_by_rate_limit'] / $results['total_requests']) * 100;
             $results['error_rate'] = ($results['errors'] / $results['total_requests']) * 100;
         }
         
@@ -287,16 +308,22 @@ class StressTestRunner
             'leaky' => $factory->createLeakyBucket(),
             'gcra' => $factory->createGCRA(),
             'token' => $factory->createTokenBucket(),
+            'concurrency' => $factory->createConcurrencyAware(),
             default => throw new InvalidArgumentException("Unknown algorithm: {$algorithm}")
         };
         
         $stats = [
             'successful' => 0,
-            'blocked' => 0, 
+            'blocked' => 0,
+            'blocked_by_concurrency' => 0,
+            'blocked_by_rate_limit' => 0, 
             'errors' => 0,
             'total_requests' => 0,
             'latency_counters' => [] // Store latency counts by rounded value (5 decimal places)
         ];
+        
+        // Track concurrency request IDs for cleanup
+        $concurrencyRequestIds = [];
         
         $testEndTime = time() + $config['duration'];
         
@@ -314,8 +341,6 @@ class StressTestRunner
             try {
                 // Measure latency of the rate limit check
                 $latencyStartTime = microtime(true);
-                // Convert old API parameters to new API parameters:
-                // API: attempt(key, burstCapacity, sustainedRate, window)
                 
                 $timeWindow = $config['window'];                    // Time window in seconds
                 
@@ -337,13 +362,42 @@ class StressTestRunner
                     $sustainedRate = $burstCapacity / (float)$timeWindow; // Calculate sustained rate (requests/second)
                 }
                 
-                // Debug output for rate limiter configuration (only show occasionally)
-                static $debugCount = 0;
-                if ($this->options['verbose'] && ++$debugCount <= 3) {
-                    echo "[DEBUG] Rate limiter config: burst=$burstCapacity, rate={$sustainedRate} req/sec, window={$timeWindow}s\n";
+                // Handle concurrency-aware algorithm
+                if ($algorithm === 'concurrency') {
+                    $requestId = 'stress_test_' . $workerId . '_' . uniqid();
+                    $maxConcurrent = $config['concurrency_max'] ?? 10;
+                    $timeoutSeconds = $config['concurrency_timeout'] ?? 30;
+                    
+                    // Debug output for concurrency rate limiter configuration (only show occasionally)
+                    static $debugCountConcurrency = 0;
+                    if ($this->options['verbose'] && ++$debugCountConcurrency <= 3) {
+                        echo "[DEBUG] Concurrency rate limiter config: concurrent={$maxConcurrent}, burst={$burstCapacity}, rate={$sustainedRate} req/sec, window={$timeWindow}s, timeout={$timeoutSeconds}s\n";
+                    }
+                    
+                    $result = $limiter->attemptWithConcurrency(
+                        $key, 
+                        $requestId, 
+                        $maxConcurrent, 
+                        $burstCapacity, 
+                        $sustainedRate, 
+                        $timeWindow, 
+                        $timeoutSeconds
+                    );
+                    
+                    // Track request ID for cleanup
+                    if ($result->successful()) {
+                        $concurrencyRequestIds[$key][] = $requestId;
+                    }
+                } else {
+                    // Debug output for regular rate limiter configuration (only show occasionally)
+                    static $debugCount = 0;
+                    if ($this->options['verbose'] && ++$debugCount <= 3) {
+                        echo "[DEBUG] Rate limiter config: burst={$burstCapacity}, rate={$sustainedRate} req/sec, window={$timeWindow}s\n";
+                    }
+                    
+                    $result = $limiter->attempt($key, $burstCapacity, $sustainedRate, $timeWindow);
                 }
                 
-                $result = $limiter->attempt($key, $burstCapacity, $sustainedRate, $timeWindow);
                 $latencyEndTime = microtime(true);
                 
                 $latency = ($latencyEndTime - $latencyStartTime) * 1000; // Convert to milliseconds
@@ -365,6 +419,18 @@ class StressTestRunner
                     $stats['successful']++;
                 } else {
                     $stats['blocked']++;
+                    
+                    // For concurrency-aware algorithm, track the specific blocking reason
+                    if ($algorithm === 'concurrency' && method_exists($result, 'rejectedByConcurrency')) {
+                        if ($result->rejectedByConcurrency()) {
+                            $stats['blocked_by_concurrency']++;
+                        } elseif ($result->rejectedByRateLimit()) {
+                            $stats['blocked_by_rate_limit']++;
+                        }
+                    } else {
+                        // For regular algorithms, assume all blocks are rate limit blocks
+                        $stats['blocked_by_rate_limit']++;
+                    }
                 }
                 
             } catch (Exception $e) {
@@ -376,6 +442,19 @@ class StressTestRunner
             // Rate limiting to prevent overwhelming the system
             if ($requestDelay > 0) {
                 usleep((int)$requestDelay);
+            }
+        }
+        
+        // Cleanup concurrency requests if using concurrency algorithm
+        if ($algorithm === 'concurrency' && !empty($concurrencyRequestIds)) {
+            foreach ($concurrencyRequestIds as $key => $requestIds) {
+                foreach ($requestIds as $requestId) {
+                    try {
+                        $limiter->releaseConcurrency($key, $requestId);
+                    } catch (Exception $e) {
+                        // Ignore cleanup errors
+                    }
+                }
             }
         }
         
@@ -414,6 +493,8 @@ class StressTestRunner
             'Requests/sec' => ['rps', '%.2f'],
             'Success Rate %' => ['success_rate', '%.2f%%'],
             'Block Rate %' => ['block_rate', '%.2f%%'],
+            'Concurrency Block %' => ['concurrency_block_rate', '%.2f%%'],
+            'Rate Limit Block %' => ['rate_limit_block_rate', '%.2f%%'],
             'Error Rate %' => ['error_rate', '%.2f%%'],
             'Duration (s)' => ['duration', '%.2f'],
             'Latency Avg (ms)' => ['latency_avg', '%.3f'],
@@ -775,7 +856,7 @@ function showHelp(): void
     echo "Usage: php stress-test.php [OPTIONS]\n\n";
     echo "Options:\n";
     echo "  --help                 Show this help message\n";
-    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed,leaky,gcra,token or combinations (default: sliding,fixed,leaky,gcra,token)\n";
+    echo "  --algorithms=ALG       Algorithms to test: sliding,fixed,leaky,gcra,token,concurrency or combinations (default: all)\n";
     echo "  --scenarios=SCENARIO   Test scenarios: high,medium,low,burst,all or custom (default: all)\n";
     echo "  --duration=SECONDS     Duration of each test in seconds (default: 30)\n";
     echo "  --processes=NUM        Number of concurrent processes (default: 20)\n";
@@ -786,6 +867,8 @@ function showHelp(): void
     echo "  --limiter-rps=NUM      Set rate limiter sustained rate (requests/sec) independent of test load\n";
     echo "  --limiter-burst=NUM    Set rate limiter burst capacity (default: 10x sustained rate)\n";
     echo "  --limiter-window=NUM   Set rate limiter window size for window-based algorithms (default: 60 seconds)\n";
+    echo "  --concurrency-max=NUM  Set maximum concurrent requests for concurrency-aware algorithm\n";
+    echo "  --concurrency-timeout=SEC  Set timeout for concurrency requests in seconds (default: 30)\n";
     echo "  --verbose              Enable verbose output\n";
     echo "  --no-clear             Don't clear Redis between tests\n";
     echo "  --max-speed            Performance mode: send requests as fast as possible (no throttling)\n";
@@ -801,7 +884,9 @@ function showHelp(): void
     echo "  php stress-test.php --scenarios=burst --algorithms=fixed\n";
     echo "  php stress-test.php --max-speed --duration=5 --processes=4\n";
     echo "  php stress-test.php --latency-precision=5 --latency-sample=1 --algorithms=gcra\n";
-    echo "  php stress-test.php --latency-sample=100 --max-speed --duration=10\n\n";
+    echo "  php stress-test.php --latency-sample=100 --max-speed --duration=10\n";
+    echo "  php stress-test.php --algorithms=concurrency --concurrency-max=5 --limiter-rps=10 --duration=15\n";
+    echo "  php stress-test.php --algorithms=concurrency,sliding --concurrency-max=10 --concurrency-timeout=60 --scenarios=high\n\n";
     echo "Scenarios:\n";
     echo "  high    - High contention (5 keys, 100 req/key)\n";
     echo "  medium  - Medium contention (50 keys, 50 req/key)\n";
@@ -810,11 +895,12 @@ function showHelp(): void
     echo "  all     - Run all predefined scenarios\n";
     echo "  custom  - Use custom parameters (requires --keys)\n\n";
     echo "Algorithms:\n";
-    echo "  sliding - Sliding window algorithm (precise, higher memory)\n";
-    echo "  fixed   - Fixed window algorithm (efficient, allows burst)\n";
-    echo "  leaky   - Leaky bucket algorithm (allows burst, enforces average rate)\n";
-    echo "  gcra    - GCRA algorithm (memory efficient, smooth rate limiting)\n";
-    echo "  token   - Token bucket algorithm (allows burst, gradual refill)\n\n";
+    echo "  sliding     - Sliding window algorithm (precise, higher memory)\n";
+    echo "  fixed       - Fixed window algorithm (efficient, allows burst)\n";
+    echo "  leaky       - Leaky bucket algorithm (allows burst, enforces average rate)\n";
+    echo "  gcra        - GCRA algorithm (memory efficient, smooth rate limiting)\n";
+    echo "  token       - Token bucket algorithm (allows burst, gradual refill)\n";
+    echo "  concurrency - Concurrency-aware sliding window (prevents request pileup)\n\n";
 }
 
 function parseArguments(): array
@@ -875,6 +961,13 @@ function parseArguments(): array
                 case 'latency-sample':
                     $options['latency_sample'] = max(1, (int)$value); // Minimum 1 (collect all)
                     break;
+                case 'concurrency-max':
+                    $options['concurrency_max'] = (int)$value;
+                    $options['use_concurrency'] = true;
+                    break;
+                case 'concurrency-timeout':
+                    $options['concurrency_timeout'] = (int)$value;
+                    break;
             }
         } elseif ($arg === '--verbose') {
             $options['verbose'] = true;
@@ -887,10 +980,10 @@ function parseArguments(): array
     
     // Validate algorithms
     if (isset($options['algorithms'])) {
-        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra', 'token'];
+        $validAlgorithms = ['sliding', 'fixed', 'leaky', 'gcra', 'token', 'concurrency'];
         $options['algorithms'] = array_intersect($options['algorithms'], $validAlgorithms);
         if (empty($options['algorithms'])) {
-            die("ERROR: Invalid algorithms. Valid options: sliding, fixed, leaky, gcra, token\n");
+            die("ERROR: Invalid algorithms. Valid options: sliding, fixed, leaky, gcra, token, concurrency\n");
         }
     }
     

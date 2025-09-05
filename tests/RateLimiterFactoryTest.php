@@ -5,11 +5,13 @@ namespace Cm\RateLimiter\Tests;
 use PHPUnit\Framework\TestCase;
 use Cm\RateLimiter\RateLimiterFactory;
 use Cm\RateLimiter\RateLimiterInterface;
+use Cm\RateLimiter\ConcurrencyAwareRateLimiterInterface;
 use Cm\RateLimiter\SlidingWindow\RateLimiter as SlidingWindowRateLimiter;
 use Cm\RateLimiter\FixedWindow\RateLimiter as FixedWindowRateLimiter;
 use Cm\RateLimiter\LeakyBucket\RateLimiter as LeakyBucketRateLimiter;
 use Cm\RateLimiter\GCRA\RateLimiter as GCRARateLimiter;
 use Cm\RateLimiter\TokenBucket\RateLimiter as TokenBucketRateLimiter;
+use Cm\RateLimiter\ConcurrencyAware\RateLimiter as ConcurrencyAwareRateLimiter;
 use Credis_Client;
 
 class RateLimiterFactoryTest extends TestCase
@@ -153,5 +155,39 @@ class RateLimiterFactoryTest extends TestCase
         $this->assertEquals(1, $leakyBucket->attempts('independence-test', 30));
         $this->assertGreaterThanOrEqual(0, $gcra->attempts('independence-test', 30));
         $this->assertEquals(1, $tokenBucket->attempts('independence-test', 30));
+    }
+
+    public function testCreateConcurrencyAware(): void
+    {
+        $rateLimiter = $this->factory->createConcurrencyAware();
+        
+        $this->assertInstanceOf(ConcurrencyAwareRateLimiterInterface::class, $rateLimiter);
+        $this->assertInstanceOf(ConcurrencyAwareRateLimiter::class, $rateLimiter);
+    }
+
+    public function testConcurrencyAwareRateLimiterWorks(): void
+    {
+        $rateLimiter = $this->factory->createConcurrencyAware();
+        
+        // Test basic concurrency-aware functionality
+        $result = $rateLimiter->attemptWithConcurrency(
+            'concurrency-factory-test', 
+            'req1', 
+            2,    // maxConcurrent
+            10,   // burstCapacity
+            5.0,  // sustainedRate
+            60,   // window
+            30    // timeoutSeconds
+        );
+        
+        $this->assertTrue($result->successful());
+        $this->assertTrue($result->concurrencyAcquired);
+        $this->assertEquals(1, $result->currentConcurrency);
+        $this->assertEquals(2, $result->maxConcurrency);
+        
+        // Test backward compatibility
+        $backwardResult = $rateLimiter->attempt('backward-compat-test', 10, 5.0, 60);
+        $this->assertTrue($backwardResult->successful());
+        $this->assertGreaterThan(0, $backwardResult->retriesLeft);
     }
 }

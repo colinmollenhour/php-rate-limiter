@@ -7,6 +7,7 @@ use Cm\RateLimiter\FixedWindow\RateLimiter as FixedWindowRateLimiter;
 use Cm\RateLimiter\LeakyBucket\RateLimiter as LeakyBucketRateLimiter;
 use Cm\RateLimiter\GCRA\RateLimiter as GCRARateLimiter;
 use Cm\RateLimiter\TokenBucket\RateLimiter as TokenBucketRateLimiter;
+use Cm\RateLimiter\ConcurrencyAware\RateLimiter as ConcurrencyAwareRateLimiter;
 use Credis_Client;
 
 class RateLimiterFactory
@@ -41,5 +42,23 @@ class RateLimiterFactory
     public function createTokenBucket(): RateLimiterInterface
     {
         return new TokenBucketRateLimiter($this->redis);
+    }
+
+    public function createConcurrencyAware(?string $algorithm = 'sliding'): ConcurrencyAwareRateLimiterInterface
+    {
+        $rateLimiter = null;
+        
+        if ($algorithm !== null) {
+            $rateLimiter = match ($algorithm) {
+                'sliding' => $this->createSlidingWindow(),
+                'fixed' => $this->createFixedWindow(), 
+                'leaky' => $this->createLeakyBucket(),
+                'gcra' => $this->createGCRA(),
+                'token' => $this->createTokenBucket(),
+                default => throw new InvalidArgumentException("Unknown algorithm: {$algorithm}")
+            };
+        }
+        
+        return new ConcurrencyAwareRateLimiter($this->redis, $rateLimiter);
     }
 }
